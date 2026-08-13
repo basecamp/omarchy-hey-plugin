@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "37signals.hey",
+  "name": "HEY",
+  "version": "0.1.0",
+  "author": "37signals",
+  "license": "MIT",
+  "description": "Unread email from HEY through the HEY CLI.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "HEY",
+    "description": "Unread count and recent email from the HEY Imbox.",
+    "category": "Communication",
+    "aliases": [
+      "hey",
+      "email",
+      "mail"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 600,
+      "maxNotifications": 50
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 60,
+        "max": 3600,
+        "step": 60,
+        "defaultValue": 600
+      },
+      {
+        "key": "maxNotifications",
+        "type": "integer",
+        "label": "Emails to load",
+        "min": 10,
+        "max": 100,
+        "step": 10,
+        "defaultValue": 50
+      }
+    ]
+  }
+}
