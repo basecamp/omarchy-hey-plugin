@@ -297,6 +297,7 @@ Panel {
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(7)
                   verticalPadding: Style.space(1)
+                  onClicked: Qt.openUrlExternally("https://app.hey.com/clearances")
                 }
               }
             }
