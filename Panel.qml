@@ -261,6 +261,15 @@ Panel {
                 font.bold: true
               }
 
+              Text {
+                width: parent.width
+                text: "DESIGNED & BUILT BY 37SIGNALS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+              }
+
               Row {
                 visible: !root.needsSetup
                 spacing: Style.space(2)
