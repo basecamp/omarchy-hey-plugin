@@ -51,11 +51,9 @@ Panel {
   property int phraseIndex: 0
   readonly property var loadingPhrases: [
     "Walking to the mailbox",
-    "Sorting the mail",
-    "Screening the senders",
-    "Skimming The Feed",
-    "Filing the Paper Trail",
-    "Opening the envelopes"
+    "Licking the stamp",
+    "Sealing the envelope",
+    "Opening the letters"
   ]
   // Guard on needsSetup: the setup-state retry timer probes every few
   // seconds, and each probe would otherwise flash a loading phrase.
