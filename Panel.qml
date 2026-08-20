@@ -57,7 +57,9 @@ Panel {
     "Filing the Paper Trail",
     "Opening the envelopes"
   ]
-  readonly property bool rotatingPhrases: service.refreshing
+  // Guard on needsSetup: the setup-state retry timer probes every few
+  // seconds, and each probe would otherwise flash a loading phrase.
+  readonly property bool rotatingPhrases: service.refreshing && !needsSetup
 
   readonly property string heroStatusText: {
     if (service.actionStatus !== "") return service.actionStatus
@@ -99,18 +101,18 @@ Panel {
     return "No previously seen email."
   }
 
-  readonly property bool needsSetup: service.probed && (!service.installed || !service.authenticated)
-  readonly property string setupCommand: {
-    if (!service.installed) return "omarchy pkg add hey-cli"
-    return "hey auth login"
-  }
-  readonly property string setupTitle: {
-    if (!service.installed) return "HEY CLI is required"
-    return "Please sign in"
-  }
-  readonly property string setupHint: {
-    if (!service.installed) return "Press R to retry after install completes."
-    return "After you authenticate, press R to retry."
+  readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, ipcTarget)
+  readonly property bool needsSetup: service.probed && setupPlan.needed
+
+  // Keep one setup flow active until its command reports completion. This
+  // prevents a second browser login regardless of how long authentication
+  // takes, while permitting an immediate retry after failure.
+  onNeedsSetupChanged: if (!needsSetup) service.finishSetup()
+
+  function launchSetup() {
+    if (!bar || !service.tryStartSetup()) return
+    bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(setupPlan.launchCommand))
+    close()
   }
 
   property var avatarPalette: []
@@ -197,6 +199,7 @@ Panel {
     cursorActive = false
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
+    service.checkSetupRunning()
     service.refreshIfStale()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -206,6 +209,19 @@ Panel {
   PointerMoveGate {
     id: pointerGate
     referenceItem: panelFlick
+  }
+
+  // Auto-retry while a setup state is showing: each tick is one local
+  // `auth status` probe, so the panel recovers on its own once the user
+  // finishes installing or signing in.
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.opened && (root.needsSetup || service.probeError)
+    onTriggered: {
+      service.checkSetupRunning()
+      service.refresh()
+    }
   }
 
   // The shell's Color singleton keeps only a few theme roles, so the avatar
@@ -278,6 +294,11 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { service.refresh(); return "ok" }
+    function setupFinished(): string {
+      service.finishSetup()
+      service.refresh()
+      return "ok"
+    }
     function unread(): int { return service.unreadCount }
     function status(): string {
       return JSON.stringify({
@@ -516,12 +537,27 @@ Panel {
 
               Text {
                 width: parent.width
-                text: root.setupTitle
+                text: root.setupPlan.title
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
+              }
+
+              Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: root.setupPlan.buttonLabel
+                bordered: true
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                horizontalPadding: Style.spacing.controlPaddingX
+                verticalPadding: Style.spacing.controlPaddingY
+                enabled: !service.setupRunning && !service.setupChecking
+                onClicked: root.launchSetup()
               }
 
               Item {
@@ -534,11 +570,10 @@ Panel {
                   spacing: Style.space(6)
 
                   Text {
-                    text: root.setupCommand
-                    color: root.foreground
+                    text: "or run: " + root.setupPlan.command
+                    color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
+                    font.pixelSize: Style.font.bodySmall
                   }
 
                   Text {
@@ -546,7 +581,7 @@ Panel {
                     text: "󰆏"
                     color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
+                    font.pixelSize: Style.font.bodySmall
                   }
                 }
 
@@ -556,7 +591,7 @@ Panel {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
-                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupCommand) + " | wl-copy"])
+                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupPlan.command) + " | wl-copy"])
                     setupCopiedTimer.restart()
                   }
                 }
@@ -571,15 +606,6 @@ Panel {
                   id: setupCopiedTimer
                   interval: 1500
                 }
-              }
-
-              Text {
-                width: parent.width
-                text: root.setupHint
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                horizontalAlignment: Text.AlignHCenter
               }
             }
 

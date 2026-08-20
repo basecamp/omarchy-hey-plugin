@@ -1,3 +1,46 @@
+// One place for the setup-state UI contract: which state wins (missing CLI
+// beats signed-out), the user-facing strings, and the exact shell command
+// the panel launches in a floating terminal. The launch command preserves
+// the fix's exit status through the IPC refresh so the terminal
+// presentation can honor Ctrl-C (exit 130) from the fix itself.
+var setupLockFilename = "37signals.hey.setup.lock"
+
+function setupLockPath(runtimeDir) {
+  return String(runtimeDir || "/tmp").replace(/\/+$/, "") + "/" + setupLockFilename
+}
+
+function shellQuote(value) {
+  return "'" + String(value || "").replace(/'/g, "'\\''") + "'"
+}
+
+function setupLaunchCommand(fix, ipcTarget) {
+  var target = shellQuote(ipcTarget)
+  var completion = "omarchy-shell -q \"$target\" setupFinished"
+  return "target=" + target + "; lock=\"${XDG_RUNTIME_DIR:-/tmp}/" + setupLockFilename + "\"; "
+    + "( flock -n 9 || { printf '%s\\n' 'HEY setup is already running.'; exit 75; }; "
+    + "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
+    + "trap 'rc=$?; trap - EXIT; flock -u 9; " + completion + "; exit $rc' EXIT; "
+    + String(fix || "") + " ) 9>\"$lock\""
+}
+
+function setupPlan(installed, authenticated, ipcTarget) {
+  var plan = {
+    needed: installed !== true || authenticated !== true,
+    title: "Please sign in",
+    command: "hey auth login",
+    buttonLabel: "Sign in to HEY…",
+    fix: "hey auth login"
+  }
+  if (installed !== true) {
+    plan.title = "HEY CLI is required"
+    plan.command = "omarchy pkg add hey-cli"
+    plan.buttonLabel = "Install HEY CLI…"
+    plan.fix = "omarchy-pkg-add hey-cli && hey auth login"
+  }
+  plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
+  return plan
+}
+
 function parseJson(raw) {
   var text = String(raw || "").trim()
   if (text === "") return { ok: false, error: "The HEY CLI returned no data", code: "" }
@@ -253,6 +296,9 @@ function notificationMeta(item, nowMs, showAccount) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    setupLockPath: setupLockPath,
+    setupLaunchCommand: setupLaunchCommand,
+    setupPlan: setupPlan,
     parseJson: parseJson,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,
