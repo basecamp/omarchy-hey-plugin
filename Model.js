@@ -146,6 +146,54 @@ function accountFilterOptions(accounts) {
   return options
 }
 
+// Chromatic ANSI slots only: black/white and the greys make unreadable
+// avatar fills, so they never join the palette. Omarchy themes write
+// colors.toml in one of two schemas — numbered terminal slots (color1..14)
+// or named colors (red, bright_blue, ...) — so both key styles are listed.
+var AVATAR_COLOR_KEYS = [
+  "color1", "color2", "color3", "color4", "color5", "color6",
+  "color9", "color10", "color11", "color12", "color13", "color14",
+  "red", "orange", "yellow", "green", "cyan", "blue", "magenta", "brown",
+  "bright_red", "bright_yellow", "bright_green",
+  "bright_cyan", "bright_blue", "bright_magenta"
+]
+
+function themeAvatarPalette(raw) {
+  var byKey = {}
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+    if (match) byKey[match[1]] = match[2]
+  }
+
+  var palette = []
+  var seen = {}
+  for (var k = 0; k < AVATAR_COLOR_KEYS.length; k++) {
+    var hex = byKey[AVATAR_COLOR_KEYS[k]]
+    if (!hex) continue
+    var lower = hex.toLowerCase()
+    if (seen[lower]) continue
+    seen[lower] = true
+    palette.push(hex)
+  }
+  return palette
+}
+
+function nameHash(text) {
+  var value = String(text || "")
+  var hash = 5381
+  for (var i = 0; i < value.length; i++) hash = ((hash * 33) ^ value.charCodeAt(i)) >>> 0
+  return hash
+}
+
+// Same idea as haystack's avatar_background_color: a stable hash of the
+// sender picks the color, so one sender always gets the same fill.
+function avatarColorIndex(name, count) {
+  var total = Number(count || 0)
+  if (!isFinite(total) || total <= 0) return 0
+  return nameHash(cleanText(name)) % total
+}
+
 function notificationBadgeText(item, hovered) {
   if (hovered) return "󰅖"  // md-close
   return String(Math.max(1, (item && item.unreadCount) || 0))
@@ -213,6 +261,8 @@ if (typeof module !== "undefined") {
     accountFilterOptions: accountFilterOptions,
     notificationBadgeText: notificationBadgeText,
     computeInitials: computeInitials,
+    themeAvatarPalette: themeAvatarPalette,
+    avatarColorIndex: avatarColorIndex,
     cleanText: cleanText,
     notificationTime: notificationTime,
     notificationMeta: notificationMeta

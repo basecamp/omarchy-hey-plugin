@@ -113,12 +113,12 @@ Panel {
     return "After you authenticate, press R to retry."
   }
 
-  function typeColor(type) {
-    var value = String(type || "").toLowerCase()
-    if (value.indexOf("calendar") !== -1 || value.indexOf("invite") !== -1) return Color.muted
-    if (value === "bundle") return Qt.darker(foreground, 1.2)
-    if (value === "message" || value === "email") return Color.accent
-    return foreground
+  property var avatarPalette: []
+
+  function avatarColor(item) {
+    var palette = avatarPalette
+    if (!palette || palette.length === 0) return Color.accent
+    return palette[Model.avatarColorIndex(item.creator || item.title, palette.length)]
   }
 
   function accountUnreadCount(accountId) {
@@ -208,6 +208,29 @@ Panel {
     referenceItem: panelFlick
   }
 
+  // The shell's Color singleton keeps only a few theme roles, so the avatar
+  // palette reads the theme's ANSI colors straight from colors.toml.
+  FileView {
+    id: themeColorsFile
+    path: Color.currentThemePath + "/colors.toml"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.avatarPalette = Model.themeAvatarPalette(text())
+    // `text()` is stale inside the change signal itself, so route changes
+    // through reload → onLoaded to always parse fresh content.
+    onFileChanged: themeColorsFile.reload()
+    onLoadFailed: root.avatarPalette = []
+  }
+
+  // Theme switches replace the files under current/theme, which can strand
+  // the watcher on a dead inode. The shell pushes new theme colors into the
+  // Color singleton over IPC, so those changes signal a re-read here.
+  Connections {
+    target: Color
+    function onForegroundChanged() { themeColorsFile.reload() }
+    function onAccentChanged() { themeColorsFile.reload() }
+  }
+
   Service {
     id: service
     settings: root.settings
@@ -266,6 +289,7 @@ Panel {
         stateFilter: root.stateFilter,
         accountFilter: root.accountFilter,
         refreshing: service.refreshing,
+        palette: root.avatarPalette.length,
         error: service.lastError
       })
     }
@@ -620,7 +644,7 @@ Panel {
                       Layout.preferredHeight: Style.space(24)
                       Layout.alignment: Qt.AlignTop
                       radius: width / 2
-                      color: root.typeColor(notificationRow.modelData.type)
+                      color: root.avatarColor(notificationRow.modelData)
 
                       Text {
                         anchors.centerIn: parent
