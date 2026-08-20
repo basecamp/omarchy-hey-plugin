@@ -1,3 +1,21 @@
+function setupPlan(installed, authenticated, ipcTarget) {
+  var plan = {
+    needed: installed !== true || authenticated !== true,
+    title: "Please sign in",
+    command: "hey auth login",
+    buttonLabel: "Sign in to HEY…",
+    fix: "hey auth login"
+  }
+  if (installed !== true) {
+    plan.title = "HEY CLI is required"
+    plan.command = "omarchy pkg aur add hey-cli"
+    plan.buttonLabel = "Install HEY CLI…"
+    plan.fix = "omarchy-pkg-aur-add hey-cli && hey auth login"
+  }
+  plan.launchCommand = plan.fix + "; rc=$?; omarchy-shell -q " + String(ipcTarget || "") + " refresh; (exit $rc)"
+  return plan
+}
+
 function parseJson(raw) {
   var text = String(raw || "").trim()
   if (text === "") return { ok: false, error: "The HEY CLI returned no data" }
@@ -141,6 +159,7 @@ function notificationMeta(item, nowMs) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    setupPlan: setupPlan,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,
     filterNotifications: filterNotifications,
