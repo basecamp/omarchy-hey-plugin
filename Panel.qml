@@ -55,12 +55,19 @@ Panel {
     return "No email to show."
   }
 
-  readonly property bool needsSetup: service.probed && (!service.installed || !service.authenticated)
-  readonly property string setupCommand: service.installed ? "hey auth login" : "omarchy pkg aur add hey-cli"
-  readonly property string setupTitle: service.installed ? "Please sign in" : "HEY CLI is required"
-  readonly property string setupHint: service.installed
-    ? "After you authenticate, press R to retry."
-    : "Press R to retry after install completes."
+  readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, ipcTarget)
+  readonly property bool needsSetup: service.probed && setupPlan.needed
+
+  property double setupLaunchedMs: 0
+  onNeedsSetupChanged: if (!needsSetup) setupLaunchedMs = 0
+
+  function launchSetup() {
+    if (!bar) return
+    if (setupLaunchedMs > 0 && Date.now() - setupLaunchedMs < 30000) return
+    setupLaunchedMs = Date.now()
+    bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(setupPlan.launchCommand))
+    close()
+  }
 
   function accountUnreadCount(accountId) {
     var id = String(accountId || "")
@@ -144,6 +151,13 @@ Panel {
 
   onFilteredNotificationsChanged: ensureSelection()
 
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.opened && (root.needsSetup || service.probeError)
+    onTriggered: service.refresh()
+  }
+
   Service {
     id: service
     settings: root.settings
@@ -172,6 +186,7 @@ Panel {
         installed: service.installed,
         authenticated: service.authenticated,
         probed: service.probed,
+        probeError: service.probeError,
         error: service.lastError
       })
     }
@@ -447,12 +462,26 @@ Panel {
 
               Text {
                 width: parent.width
-                text: root.setupTitle
+                text: root.setupPlan.title
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
+              }
+
+              Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: root.setupPlan.buttonLabel
+                bordered: true
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                horizontalPadding: Style.spacing.controlPaddingX
+                verticalPadding: Style.spacing.controlPaddingY
+                onClicked: root.launchSetup()
               }
 
               Item {
@@ -465,11 +494,10 @@ Panel {
                   spacing: Style.space(6)
 
                   Text {
-                    text: root.setupCommand
-                    color: root.foreground
+                    text: "or run: " + root.setupPlan.command
+                    color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
+                    font.pixelSize: Style.font.bodySmall
                   }
 
                   Text {
@@ -477,7 +505,7 @@ Panel {
                     text: "󰆏"
                     color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
+                    font.pixelSize: Style.font.bodySmall
                   }
                 }
 
@@ -487,7 +515,7 @@ Panel {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
-                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupCommand) + " | wl-copy"])
+                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupPlan.command) + " | wl-copy"])
                     setupCopiedTimer.restart()
                   }
                 }
@@ -502,15 +530,6 @@ Panel {
                   id: setupCopiedTimer
                   interval: 1500
                 }
-              }
-
-              Text {
-                width: parent.width
-                text: root.setupHint
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                horizontalAlignment: Text.AlignHCenter
               }
             }
 

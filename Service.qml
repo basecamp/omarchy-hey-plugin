@@ -11,6 +11,7 @@ Item {
   property bool installed: true
   property bool authenticated: true
   property bool probed: false
+  property bool probeError: false
   property var accounts: []
   property var notifications: []
   property int unreadCount: 0
@@ -64,6 +65,7 @@ Item {
 
   function finishProbe(stdout) {
     probed = true
+    probeError = false
     var text = String(stdout || "")
     if (text.trim() === "missing") {
       installed = false
@@ -79,6 +81,7 @@ Item {
     var authResult = Model.parseJson(text)
     if (!authResult.ok || !authResult.value.data) {
       authenticated = true
+      probeError = true
       lastError = conciseError("Could not check the HEY CLI: " + (authResult.error || "unexpected response"))
       refreshing = false
       return
