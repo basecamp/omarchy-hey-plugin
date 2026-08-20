@@ -445,6 +445,12 @@ Panel {
             fontFamily: root.fontFamily
             onChanged: function(value) { root.setAccountFilter(value) }
 
+            // The dropdown trigger keeps active focus after its popup
+            // closes, and its own key handler eats Enter/Space/Down. Hand
+            // focus back to the key catcher so arrows drive the list again.
+            // callLater runs after the popup's internal focus juggling.
+            onPopupOpenChanged: if (!popupOpen) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+
             // Binding element (not an inline binding) so it survives the
             // imperative `value` write Dropdown makes on selection.
             Binding on value {
