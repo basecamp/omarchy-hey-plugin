@@ -64,10 +64,20 @@ The plugin manifest declares the right bar section as its default placement.
 The plugin runs these local CLI commands:
 
 ```text
+hey auth status --json
 hey box imbox --limit <count> --json
 hey seen <posting-id> --json
 hey auth token --quiet
 curl https://app.hey.com/clearances.json
+```
+
+When selected, the setup buttons also run these local commands in a floating terminal:
+
+```text
+omarchy-launch-floating-terminal-with-presentation <setup command>
+omarchy-pkg-aur-add hey-cli
+hey auth login
+omarchy-shell -q 37signals.hey refresh
 ```
 
 Email data is held in the Quickshell process memory. The Screener count comes from HEY's authenticated `/clearances.json` endpoint because the CLI does not yet expose it directly. The access token is passed in process memory and is not written to disk. The plugin does not write email content, credentials, or tokens to disk.

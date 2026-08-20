@@ -25,6 +25,7 @@ Item {
   readonly property int accountCount: 0
 
   property string _probeOutput: ""
+  property string _probeErrorOutput: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
   property string _screenerOutput: ""
@@ -60,13 +61,15 @@ Item {
     refreshing = true
     lastError = ""
     _probeOutput = ""
+    _probeErrorOutput = ""
     probeProcess.running = true
   }
 
-  function finishProbe(stdout) {
+  function finishProbe(exitCode, stdout, stderr) {
     probed = true
     probeError = false
     var text = String(stdout || "")
+    var errorText = String(stderr || "")
     if (text.trim() === "missing") {
       installed = false
       authenticated = true
@@ -78,11 +81,19 @@ Item {
     }
 
     installed = true
+    if (exitCode !== 0) {
+      authenticated = true
+      probeError = true
+      lastError = conciseError(errorText || text, "Could not check the HEY CLI")
+      refreshing = false
+      return
+    }
+
     var authResult = Model.parseJson(text)
     if (!authResult.ok || !authResult.value.data) {
       authenticated = true
       probeError = true
-      lastError = conciseError("Could not check the HEY CLI: " + (authResult.error || "unexpected response"))
+      lastError = conciseError(errorText || ("Could not check the HEY CLI: " + (authResult.error || "unexpected response")))
       refreshing = false
       return
     }
@@ -202,8 +213,16 @@ Item {
       waitForEnd: true
       onStreamFinished: root._probeOutput = text
     }
+    stderr: StdioCollector {
+      id: probeStderr
+      waitForEnd: true
+      onStreamFinished: root._probeErrorOutput = text
+    }
     onExited: function(exitCode) {
-      root.finishProbe(String(probeStdout.text || root._probeOutput || ""))
+      root.finishProbe(
+        exitCode,
+        String(probeStdout.text || root._probeOutput || ""),
+        String(probeStderr.text || root._probeErrorOutput || ""))
     }
   }
 
