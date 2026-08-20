@@ -55,10 +55,12 @@ Panel {
     return "No email to show."
   }
 
-  readonly property bool needsSetup: service.probed && !service.installed
-  readonly property string setupCommand: "omarchy pkg aur add hey-cli"
-  readonly property string setupTitle: "HEY CLI is required"
-  readonly property string setupHint: "Press R to retry after install completes."
+  readonly property bool needsSetup: service.probed && (!service.installed || !service.authenticated)
+  readonly property string setupCommand: service.installed ? "hey auth login" : "omarchy pkg aur add hey-cli"
+  readonly property string setupTitle: service.installed ? "Please sign in" : "HEY CLI is required"
+  readonly property string setupHint: service.installed
+    ? "After you authenticate, press R to retry."
+    : "Press R to retry after install completes."
 
   function accountUnreadCount(accountId) {
     var id = String(accountId || "")
@@ -168,6 +170,7 @@ Panel {
         accountFilter: root.accountFilter,
         refreshing: service.refreshing,
         installed: service.installed,
+        authenticated: service.authenticated,
         probed: service.probed,
         error: service.lastError
       })
@@ -187,9 +190,11 @@ Panel {
         }
       }
     }
-    tooltipText: service.refreshing
-      ? "Refreshing HEY email"
-      : (service.unreadCount === 1 ? "1 unread HEY email" : service.unreadCount + " unread HEY emails")
+    tooltipText: root.needsSetup
+      ? "HEY setup required"
+      : (service.refreshing
+          ? "Refreshing HEY email"
+          : (service.unreadCount === 1 ? "1 unread HEY email" : service.unreadCount + " unread HEY emails"))
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
       else root.toggle()

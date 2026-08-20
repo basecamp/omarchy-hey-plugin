@@ -9,6 +9,7 @@ Item {
   property var settings: ({})
   property bool refreshing: false
   property bool installed: true
+  property bool authenticated: true
   property bool probed: false
   property var accounts: []
   property var notifications: []
@@ -63,13 +64,35 @@ Item {
 
   function finishProbe(stdout) {
     probed = true
-    if (String(stdout || "").trim() === "missing") {
+    var text = String(stdout || "")
+    if (text.trim() === "missing") {
       installed = false
+      authenticated = true
+      notifications = []
+      unreadCount = 0
+      screenerCount = 0
       refreshing = false
       return
     }
 
     installed = true
+    var authResult = Model.parseJson(text)
+    if (!authResult.ok || !authResult.value.data) {
+      authenticated = true
+      lastError = conciseError("Could not check the HEY CLI: " + (authResult.error || "unexpected response"))
+      refreshing = false
+      return
+    }
+
+    authenticated = authResult.value.data.authenticated === true
+    if (!authenticated) {
+      notifications = []
+      unreadCount = 0
+      screenerCount = 0
+      refreshing = false
+      return
+    }
+
     _notificationsOutput = ""
     _notificationsError = ""
     _screenerOutput = ""
@@ -170,7 +193,7 @@ Item {
     running: false
     // The bash wrapper always exits. A missing executable does not reliably
     // emit `exited` when it is started directly by Quickshell.
-    command: ["bash", "-c", "command -v hey >/dev/null 2>&1 && echo installed || echo missing"]
+    command: ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey auth status --json"]
     stdout: StdioCollector {
       id: probeStdout
       waitForEnd: true
