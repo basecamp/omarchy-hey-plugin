@@ -6,9 +6,11 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 
 ## Features
 
-- Shows unseen Imbox email by default.
+- Shows unseen Imbox email from every linked HEY account.
+- Switches between accounts with a dropdown that shows the unread count per account.
+- Splits email into `New for you` and `Previously seen` tabs.
 - Shows the pending Screener count without including it in the unread count.
-- Switches between unseen and recent email.
+- Shows sender initials in a colored avatar on each email row.
 - Opens email topics in HEY and marks unseen postings as seen.
 - Changes the bar logo color when unseen email exists.
 - Polls every 10 minutes. Right-click or middle-click the bar logo to refresh immediately.
@@ -16,7 +18,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 ## Requirements
 
 - Omarchy with Quickshell plugin support.
-- A current [HEY CLI](https://github.com/basecamp/hey-cli) build with the `seen` command.
+- A current [HEY CLI](https://github.com/basecamp/hey-cli) build with the `seen` and `accounts` commands. With an older CLI, the plugin still works but hides the account switcher.
 - An authenticated HEY CLI login.
 
 The current HEY CLI requires Go 1.26 or newer. Until a current package is published, install it from source using the CLI's supported installation process:
@@ -59,17 +61,19 @@ The plugin manifest declares the right bar section as its default placement.
 
 - Left-click the HEY logo to open or close the panel.
 - Right-click or middle-click the logo to refresh.
-- Select `Unread` or `All` below the HEY title.
-- Click an email to open it in HEY and mark it as seen.
-- Use the up and down arrow keys to move through email.
-- Press `U` for unseen email, `A` for all loaded email, or `R` to refresh.
+- Select `New for you` or `Previously seen` below the account dropdown.
+- Pick an account from the dropdown when more than one account is linked. A dot on the dropdown shows unread email in other accounts.
+- Click an email to open it in HEY and mark it as seen. Click the count badge to mark it as seen without opening it.
+- Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
+- Press `U` for new email, `P` for previously seen email, `S` for the Screener, or `R` to refresh.
 
 ## Privacy and security
 
 The plugin runs these local CLI commands:
 
 ```text
-hey box imbox --limit <count> --json
+hey accounts list --json
+hey box imbox --account all --limit <count> --json
 hey seen <posting-id> --json
 hey auth token --quiet
 curl https://app.hey.com/clearances.json

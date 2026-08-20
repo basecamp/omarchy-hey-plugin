@@ -26,6 +26,46 @@ Panel {
   readonly property var filteredNotifications: Model.filterNotifications(service.notifications, accountFilter, stateFilter)
   readonly property var accountFilterOptions: Model.accountFilterOptions(service.accounts)
 
+  readonly property var accountDropdownOptions: {
+    var options = accountFilterOptions
+    var out = []
+    for (var i = 0; i < options.length; i++) {
+      var count = accountUnreadCount(options[i].value)
+      out.push({
+        value: options[i].value,
+        label: count > 0 ? options[i].label + " (" + count + ")" : options[i].label
+      })
+    }
+    return out
+  }
+
+  readonly property bool otherAccountsUnread: {
+    if (accountFilter === "") return false
+    for (var i = 0; i < service.notifications.length; i++) {
+      var item = service.notifications[i]
+      if (item.unread === true && String(item.accountId || "") !== accountFilter) return true
+    }
+    return false
+  }
+
+  property int phraseIndex: 0
+  readonly property var loadingPhrases: [
+    "Walking to the mailbox",
+    "Sorting the mail",
+    "Screening the senders",
+    "Skimming The Feed",
+    "Filing the Paper Trail",
+    "Opening the envelopes"
+  ]
+  readonly property bool rotatingPhrases: service.refreshing
+
+  readonly property string heroStatusText: {
+    if (service.actionStatus !== "") return service.actionStatus
+    if (service.lastError !== "") return service.lastError
+    if (rotatingPhrases) return loadingPhrases[phraseIndex % loadingPhrases.length]
+    return "Designed & built by 37signals"
+  }
+
   function ensureAccountFilter() {
     if (accountFilter === "") return
     for (var i = 0; i < service.accounts.length; i++) {
@@ -37,7 +77,11 @@ Panel {
   function resetFilteredView() {
     selectedIndex = 0
     cursorActive = false
+    pointerGate.reset()
     if (panelFlick) panelFlick.contentY = 0
+    Qt.callLater(function() {
+      if (panelFlick) panelFlick.contentY = 0
+    })
   }
 
   function setAccountFilter(value) {
@@ -52,7 +96,15 @@ Panel {
 
   function emptyMessage() {
     if (service.notifications.length === 0 || stateFilter === "unread") return "You're all caught up."
-    return "No email to show."
+    return "No previously seen email."
+  }
+
+  function typeColor(type) {
+    var value = String(type || "").toLowerCase()
+    if (value.indexOf("calendar") !== -1 || value.indexOf("invite") !== -1) return Color.muted
+    if (value === "bundle") return Qt.darker(foreground, 1.2)
+    if (value === "message" || value === "email") return Color.accent
+    return foreground
   }
 
   function accountUnreadCount(accountId) {
@@ -137,10 +189,48 @@ Panel {
 
   onFilteredNotificationsChanged: ensureSelection()
 
+  PointerMoveGate {
+    id: pointerGate
+    referenceItem: panelFlick
+  }
+
   Service {
     id: service
     settings: root.settings
     onAccountsChanged: root.ensureAccountFilter()
+  }
+
+  Timer {
+    id: phraseTimer
+    interval: 2800
+    running: root.opened && root.rotatingPhrases
+    repeat: true
+    onTriggered: phraseSwap.restart()
+  }
+
+  SequentialAnimation {
+    id: phraseSwap
+    PropertyAnimation {
+      target: heroStatus; property: "opacity"
+      to: 0.0; duration: 180; easing.type: Easing.OutQuad
+    }
+    ScriptAction {
+      script: root.phraseIndex = (root.phraseIndex + 1) % root.loadingPhrases.length
+    }
+    PropertyAnimation {
+      target: heroStatus; property: "opacity"
+      to: 1.0; duration: 260; easing.type: Easing.InQuad
+    }
+  }
+
+  Connections {
+    target: root
+    function onRotatingPhrasesChanged() {
+      if (!root.rotatingPhrases) {
+        phraseSwap.stop()
+        heroStatus.opacity = 1.0
+      }
+    }
   }
 
   IpcHandler {
@@ -202,6 +292,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: accountDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
         if (dx !== 0) root.cycleAccountFilter(dx)
         else if (dy !== 0) root.moveSelection(dy)
@@ -212,7 +303,8 @@ Panel {
       onTextKey: function(text) {
         if (text === "r" || text === "R") service.refresh()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
-        else if (text === "a" || text === "A") root.setStateFilter("all")
+        else if (text === "p" || text === "P") root.setStateFilter("previous")
+        else if (text === "s" || text === "S") Qt.openUrlExternally("https://app.hey.com/clearances")
       }
 
       ColumnLayout {
@@ -254,51 +346,15 @@ Panel {
                 font.bold: true
               }
 
-              Row {
-                spacing: Style.space(2)
-
-                Button {
-                  text: "Unread " + service.unreadCount
-                  selected: root.stateFilter === "unread"
-                  foreground: root.foreground
-                  background: "transparent"
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(7)
-                  verticalPadding: Style.space(1)
-                  onClicked: root.setStateFilter("unread")
-                }
-
-                Button {
-                  text: "All " + service.notifications.length
-                  selected: root.stateFilter === "all"
-                  foreground: root.foreground
-                  background: "transparent"
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(7)
-                  verticalPadding: Style.space(1)
-                  onClicked: root.setStateFilter("all")
-                }
-
-                Item {
-                  width: Style.space(8)
-                  height: 1
-                }
-
-                Button {
-                  text: "Screener " + service.screenerCount
-                  foreground: root.foreground
-                  background: "transparent"
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(7)
-                  verticalPadding: Style.space(1)
-                  onClicked: Qt.openUrlExternally("https://app.hey.com/clearances")
-                }
+              Text {
+                id: heroStatus
+                visible: text !== ""
+                width: parent.width
+                text: root.heroStatusText.toUpperCase()
+                color: service.lastError !== "" && service.actionStatus === "" ? root.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
               }
             }
 
@@ -314,87 +370,84 @@ Panel {
             }
           }
 
-          Text {
-            visible: service.lastError !== "" || service.actionStatus !== ""
-            width: parent.width
-            text: service.actionStatus !== "" ? service.actionStatus : service.lastError
-            color: service.lastError !== "" && service.actionStatus === "" ? root.urgent : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
-
           PanelSeparator {
             foreground: root.foreground
           }
 
-          RowLayout {
+          Dropdown {
+            id: accountDropdown
             visible: service.accountCount > 1
             width: parent.width
-            spacing: Style.space(10)
+            showLabel: false
+            options: root.accountDropdownOptions
+            foreground: root.foreground
+            background: Color.popups.background
+            accent: Color.accent
+            fontFamily: root.fontFamily
+            onChanged: function(value) { root.setAccountFilter(value) }
 
-            Text {
-              text: "ACCOUNT"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.weight: Font.DemiBold
-              Layout.preferredWidth: Style.space(48)
-              Layout.alignment: Qt.AlignTop
-              Layout.topMargin: Style.space(4)
+            // Binding element (not an inline binding) so it survives the
+            // imperative `value` write Dropdown makes on selection.
+            Binding on value {
+              value: root.accountFilter
             }
 
-            Flow {
-              Layout.fillWidth: true
-              Layout.preferredHeight: childrenRect.height
-              spacing: Style.spacing.md
-
-              Repeater {
-                model: root.accountFilterOptions
-
-                delegate: Button {
-                  required property var modelData
-                  readonly property int unreadCount: root.accountUnreadCount(modelData.value)
-
-                  text: String(modelData.label || modelData.value || "")
-                  selected: String(modelData.value || "") === root.accountFilter
-                  bordered: true
-                  foreground: root.foreground
-                  background: Color.popups.background
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.bodySmall
-                  onClicked: root.setAccountFilter(modelData.value)
-
-                  Rectangle {
-                    id: unreadBadge
-                    visible: parent.unreadCount > 0
-                    x: parent.width - width / 2
-                    y: -height / 2
-                    height: Style.space(16)
-                    width: Math.max(height, unreadBadgeText.implicitWidth + Style.space(8))
-                    radius: height / 2
-                    color: root.urgent
-
-                    Text {
-                      id: unreadBadgeText
-                      anchors.centerIn: parent
-                      text: String(parent.parent.unreadCount)
-                      color: Color.background
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
-                  }
-                }
-              }
+            Rectangle {
+              visible: root.accountFilter !== "" && root.otherAccountsUnread
+              x: parent.width - width / 2
+              y: -height / 2
+              width: Style.space(8)
+              height: width
+              radius: width / 2
+              color: root.urgent
             }
           }
 
-          PanelSectionHeader {
-            text: "IMBOX"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(2)
+
+            Button {
+              text: "NEW FOR YOU"
+              selected: root.stateFilter === "unread"
+              foreground: root.foreground
+              background: "transparent"
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(7)
+              verticalPadding: Style.space(1)
+              onClicked: root.setStateFilter("unread")
+            }
+
+            Button {
+              text: "PREVIOUSLY SEEN"
+              selected: root.stateFilter === "previous"
+              foreground: root.foreground
+              background: "transparent"
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(7)
+              verticalPadding: Style.space(1)
+              onClicked: root.setStateFilter("previous")
+            }
+
+            Item {
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "SCREENER " + service.screenerCount
+              foreground: root.foreground
+              background: "transparent"
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(7)
+              verticalPadding: Style.space(1)
+              onClicked: Qt.openUrlExternally("https://app.hey.com/clearances")
+            }
           }
         }
 
@@ -417,127 +470,158 @@ Panel {
 
             Text {
               visible: !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
-            width: parent.width
-            text: root.emptyMessage()
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-            topPadding: Style.space(16)
-            bottomPadding: Style.space(18)
-          }
+              width: parent.width
+              text: root.emptyMessage()
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              topPadding: Style.space(16)
+              bottomPadding: Style.space(18)
+            }
 
-          Text {
-            visible: service.refreshing && service.notifications.length === 0
-            width: parent.width
-            text: "Loading email…"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-            topPadding: Style.space(16)
-            bottomPadding: Style.space(18)
-          }
+            Column {
+              id: notificationColumn
+              visible: root.filteredNotifications.length > 0
+              width: parent.width
+              spacing: Style.space(8)
 
-          Column {
-            id: notificationColumn
-            visible: root.filteredNotifications.length > 0
-            width: parent.width
-            spacing: Style.space(8)
+              Repeater {
+                model: root.filteredNotifications
 
-            Repeater {
-              model: root.filteredNotifications
+                CursorSurface {
+                  id: notificationRow
+                  required property var modelData
+                  required property int index
+                  width: notificationColumn.width
+                  foreground: root.foreground
+                  hasCursor: root.cursorActive && root.selectedIndex === index
+                  implicitHeight: rowContent.implicitHeight + Style.space(16)
 
-              CursorSurface {
-                id: notificationRow
-                required property var modelData
-                required property int index
-                width: notificationColumn.width
-                foreground: root.foreground
-                hasCursor: root.cursorActive && root.selectedIndex === index
-                implicitHeight: rowContent.implicitHeight + Style.space(16)
+                  MouseArea {
+                    id: rowMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onPositionChanged: function(mouse) {
+                      if (pointerGate.moved(notificationRow, mouse)) root.select(notificationRow.index)
+                    }
+                    onClicked: service.openNotification(notificationRow.modelData)
+                  }
 
-                MouseArea {
-                  id: rowMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onEntered: root.select(notificationRow.index)
-                  onClicked: service.openNotification(notificationRow.modelData)
-                }
+                  PanelToolTip {
+                    visible: rowMouse.containsMouse
+                    text: "Email" + (notificationRow.modelData.unread ? " · Unseen" : " · Seen")
+                    fontFamily: root.fontFamily
+                  }
 
-                PanelToolTip {
-                  visible: rowMouse.containsMouse
-                  text: (notificationRow.modelData.type || "Email") + (notificationRow.modelData.unread ? " · Unseen" : " · Seen")
-                  fontFamily: root.fontFamily
-                }
+                  RowLayout {
+                    id: rowContent
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Style.space(10)
+                    anchors.rightMargin: Style.space(10)
+                    spacing: Style.space(9)
 
-                RowLayout {
-                  id: rowContent
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  anchors.leftMargin: Style.space(10)
-                  anchors.rightMargin: Style.space(10)
-                  spacing: Style.space(9)
+                    Rectangle {
+                      Layout.preferredWidth: Style.space(24)
+                      Layout.preferredHeight: Style.space(24)
+                      Layout.alignment: Qt.AlignTop
+                      radius: width / 2
+                      color: root.typeColor(notificationRow.modelData.type)
 
-                  Item {
-                    Layout.preferredWidth: Style.space(18)
-                    Layout.preferredHeight: Style.space(20)
-                    Layout.alignment: Qt.AlignTop
+                      Text {
+                        anchors.centerIn: parent
+                        text: notificationRow.modelData.initials || "?"
+                        color: Color.popups.background
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
 
-                    Text {
-                      anchors.centerIn: parent
-                      text: Model.notificationTypeIcon(notificationRow.modelData.type)
-                      color: notificationRow.modelData.unread ? root.urgent : root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.icon
+                    ColumnLayout {
+                      Layout.fillWidth: true
+                      spacing: Style.space(2)
+
+                      Text {
+                        Layout.fillWidth: true
+                        text: notificationRow.modelData.title
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        font.weight: notificationRow.modelData.unread ? Font.DemiBold : Font.Normal
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        visible: notificationRow.modelData.excerpt !== ""
+                        Layout.fillWidth: true
+                        text: notificationRow.modelData.excerpt
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        maximumLineCount: 2
+                        wrapMode: Text.Wrap
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        Layout.fillWidth: true
+                        text: Model.notificationMeta(notificationRow.modelData, root.nowMs, root.accountFilter === "" && service.accountCount > 1)
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
                     }
 
                     Rectangle {
                       visible: notificationRow.modelData.unread
-                      anchors.top: parent.top
-                      anchors.right: parent.right
-                      width: Style.space(4)
-                      height: width
-                      radius: width / 2
+                      Layout.alignment: Qt.AlignTop
+                      Layout.topMargin: Style.space(2)
+                      Layout.preferredHeight: Style.space(16)
+                      Layout.preferredWidth: Math.max(Style.space(16), Math.max(badgeCountMetrics.width, badgeGlyphMetrics.width) + Style.space(8))
+                      radius: Style.space(8)
                       color: root.urgent
-                    }
-                  }
 
-                  ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: Style.space(2)
+                      TextMetrics {
+                        id: badgeCountMetrics
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        text: Model.notificationBadgeText(notificationRow.modelData, false)
+                      }
 
-                    Text {
-                      Layout.fillWidth: true
-                      text: notificationRow.modelData.title
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      font.weight: notificationRow.modelData.unread ? Font.DemiBold : Font.Normal
-                      elide: Text.ElideRight
-                    }
+                      TextMetrics {
+                        id: badgeGlyphMetrics
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        text: Model.notificationBadgeText(notificationRow.modelData, true)
+                      }
 
-                    Text {
-                      visible: notificationRow.modelData.excerpt !== ""
-                      Layout.fillWidth: true
-                      text: notificationRow.modelData.excerpt
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                      maximumLineCount: 2
-                      wrapMode: Text.Wrap
-                      elide: Text.ElideRight
-                    }
+                      Text {
+                        id: rowBadgeText
+                        anchors.centerIn: parent
+                        text: Model.notificationBadgeText(notificationRow.modelData, dismissMouse.containsMouse)
+                        color: Color.background
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
 
-                    Text {
-                      Layout.fillWidth: true
-                      text: Model.notificationMeta(notificationRow.modelData, root.nowMs)
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
+                      MouseArea {
+                        id: dismissMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onPositionChanged: function(mouse) {
+                          if (pointerGate.moved(notificationRow, mouse)) root.select(notificationRow.index)
+                        }
+                        onClicked: service.markRead(notificationRow.modelData)
+                      }
                     }
                   }
                 }
@@ -548,5 +632,4 @@ Panel {
       }
     }
   }
-}
 }

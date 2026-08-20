@@ -18,9 +18,10 @@ Item {
   property string actionStatus: ""
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 600, 60, 3600)
-  readonly property int maxPerAccount: intSetting("maxNotifications", 50, 10, 100)
-  readonly property int accountCount: 0
+  readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
+  readonly property int accountCount: accounts.length
 
+  property string _accountsOutput: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
   property string _screenerOutput: ""
@@ -52,25 +53,26 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || notificationProcess.running || screenerProcess.running) return
+    if (refreshing || accountsProcess.running || notificationProcess.running || screenerProcess.running) return
     refreshing = true
     installed = true
     lastError = ""
-    _notificationsOutput = ""
-    _notificationsError = ""
+    _accountsOutput = ""
     _screenerOutput = ""
     _screenerError = ""
-    notificationProcess.command = [
-      "hey", "box", "imbox",
-      "--limit", String(maxPerAccount),
-      "--json"
-    ]
-    screenerProcess.command = [
-      "bash", "-lc",
-      "token=$(hey auth token --quiet) && curl -fsS -H \"Authorization: Bearer $token\" -H \"Accept: application/json\" https://app.hey.com/clearances.json"
-    ]
-    notificationProcess.running = true
+    accountsProcess.running = true
     screenerProcess.running = true
+  }
+
+  function fetchNotifications(withAccountFilter) {
+    _notificationsOutput = ""
+    _notificationsError = ""
+    var command = ["hey", "box", "imbox", "--limit", String(maxNotifications), "--json"]
+    // Always fetch every linked account so a persisted `hey accounts use`
+    // filter cannot hide mail from the panel.
+    if (withAccountFilter) command.splice(3, 0, "--account", "all")
+    notificationProcess.command = command
+    notificationProcess.running = true
   }
 
   function finishRefresh(items) {
@@ -121,6 +123,7 @@ Item {
     _readQueue = queue
     _readOutput = ""
     _readError = ""
+    actionStatusTimer.stop()
     actionStatus = "Marking email as seen…"
     readProcess.command = [
       "hey", "seen", String(_readingNotification.id), "--json"
@@ -152,6 +155,25 @@ Item {
   }
 
   Process {
+    id: accountsProcess
+    running: false
+    command: ["hey", "accounts", "list", "--json"]
+    stdout: StdioCollector {
+      id: accountsStdout
+      waitForEnd: true
+      onStreamFinished: root._accountsOutput = text
+    }
+    onExited: function(exitCode) {
+      var stdout = String(accountsStdout.text || root._accountsOutput || "")
+      var parsed = exitCode === 0 ? Model.parseAccounts(stdout) : { ok: false, accounts: [] }
+      // An older CLI has no `accounts` command and no `--account` flag.
+      // Fall back to a single merged Imbox instead of failing the refresh.
+      root.accounts = parsed.ok ? parsed.accounts : []
+      root.fetchNotifications(parsed.ok)
+    }
+  }
+
+  Process {
     id: notificationProcess
     running: false
     command: []
@@ -176,7 +198,7 @@ Item {
         return
       }
 
-      var parsed = Model.parseNotifications(stdout, root.maxPerAccount)
+      var parsed = Model.parseNotifications(stdout, root.maxNotifications, root.accounts)
       if (!parsed.ok) {
         root.lastError = parsed.error
         root.refreshing = false
@@ -189,7 +211,10 @@ Item {
   Process {
     id: screenerProcess
     running: false
-    command: []
+    command: [
+      "bash", "-lc",
+      "token=$(hey auth token --quiet) && curl -fsS -H \"Authorization: Bearer $token\" -H \"Accept: application/json\" https://app.hey.com/clearances.json"
+    ]
     stdout: StdioCollector {
       id: screenerStdout
       waitForEnd: true
