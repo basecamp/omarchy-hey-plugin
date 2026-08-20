@@ -58,13 +58,10 @@ Panel {
   readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, ipcTarget)
   readonly property bool needsSetup: service.probed && setupPlan.needed
 
-  property double setupLaunchedMs: 0
-  onNeedsSetupChanged: if (!needsSetup) setupLaunchedMs = 0
+  onNeedsSetupChanged: if (!needsSetup) service.finishSetup()
 
   function launchSetup() {
-    if (!bar) return
-    if (setupLaunchedMs > 0 && Date.now() - setupLaunchedMs < 30000) return
-    setupLaunchedMs = Date.now()
+    if (!bar || !service.tryStartSetup()) return
     bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(setupPlan.launchCommand))
     close()
   }
@@ -145,6 +142,7 @@ Panel {
     cursorActive = false
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
+    service.checkSetupRunning()
     service.refreshIfStale()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -155,7 +153,10 @@ Panel {
     interval: 3000
     repeat: true
     running: root.opened && (root.needsSetup || service.probeError)
-    onTriggered: service.refresh()
+    onTriggered: {
+      service.checkSetupRunning()
+      service.refresh()
+    }
   }
 
   Service {
@@ -172,6 +173,11 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { service.refresh(); return "ok" }
+    function setupFinished(): string {
+      service.finishSetup()
+      service.refresh()
+      return "ok"
+    }
     function unread(): int { return service.unreadCount }
     function status(): string {
       return JSON.stringify({
@@ -187,6 +193,7 @@ Panel {
         authenticated: service.authenticated,
         probed: service.probed,
         probeError: service.probeError,
+        setupRunning: service.setupRunning,
         error: service.lastError
       })
     }
@@ -481,6 +488,7 @@ Panel {
                 fontSize: Style.font.body
                 horizontalPadding: Style.spacing.controlPaddingX
                 verticalPadding: Style.spacing.controlPaddingY
+                enabled: !service.setupRunning && !service.setupChecking
                 onClicked: root.launchSetup()
               }
 

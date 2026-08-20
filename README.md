@@ -59,6 +59,14 @@ The plugin manifest declares the right bar section as its default placement.
 - Use the up and down arrow keys to move through email.
 - Press `U` for unseen email, `A` for all loaded email, or `R` to refresh.
 
+## Development
+
+Run the model, setup-command, and QML service tests with:
+
+```bash
+./tests/run
+```
+
 ## Privacy and security
 
 The plugin runs these local CLI commands:
@@ -77,7 +85,8 @@ When selected, the setup buttons also run these local commands in a floating ter
 omarchy-launch-floating-terminal-with-presentation <setup command>
 omarchy-pkg-aur-add hey-cli
 hey auth login
-omarchy-shell -q 37signals.hey refresh
+flock -n <runtime-dir>/37signals.hey.setup.lock
+omarchy-shell -q 37signals.hey setupFinished
 ```
 
 Email data is held in the Quickshell process memory. The Screener count comes from HEY's authenticated `/clearances.json` endpoint because the CLI does not yet expose it directly. The access token is passed in process memory and is not written to disk. The plugin does not write email content, credentials, or tokens to disk.

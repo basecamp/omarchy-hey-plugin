@@ -11,7 +11,7 @@ test("setupPlan signs in when the HEY CLI is installed", () => {
   assert.equal(plan.buttonLabel, "Sign in to HEY…")
   assert.equal(plan.command, "hey auth login")
   assert.equal(plan.launchCommand,
-    "hey auth login; rc=$?; omarchy-shell -q 37signals.hey refresh; (exit $rc)")
+    Model.setupLaunchCommand("hey auth login", "37signals.hey"))
 })
 
 test("setupPlan installs the HEY CLI before signing in", () => {
@@ -22,9 +22,14 @@ test("setupPlan installs the HEY CLI before signing in", () => {
   assert.equal(plan.buttonLabel, "Install HEY CLI…")
   assert.equal(plan.command, "omarchy pkg aur add hey-cli")
   assert.equal(plan.launchCommand,
-    "omarchy-pkg-aur-add hey-cli && hey auth login; rc=$?; omarchy-shell -q 37signals.hey refresh; (exit $rc)")
+    Model.setupLaunchCommand("omarchy-pkg-aur-add hey-cli && hey auth login", "37signals.hey"))
 })
 
 test("setupPlan is not needed when setup is complete", () => {
   assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
+})
+
+test("setupLockPath uses the runtime directory with a safe fallback", () => {
+  assert.equal(Model.setupLockPath("/run/user/1000/"), "/run/user/1000/37signals.hey.setup.lock")
+  assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
 })

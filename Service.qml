@@ -12,6 +12,9 @@ Item {
   property bool authenticated: true
   property bool probed: false
   property bool probeError: false
+  property bool setupRunning: false
+  readonly property string setupLockPath: Model.setupLockPath(Quickshell.env("XDG_RUNTIME_DIR"))
+  readonly property bool setupChecking: setupLockProcess.running
   property var accounts: []
   property var notifications: []
   property int unreadCount: 0
@@ -54,6 +57,20 @@ Item {
   function refreshIfStale() {
     var updatedAt = lastUpdated instanceof Date ? lastUpdated.getTime() : 0
     if (updatedAt <= 0 || Date.now() - updatedAt >= refreshIntervalSec * 1000) refresh()
+  }
+
+  function tryStartSetup() {
+    if (setupRunning || setupChecking) return false
+    setupRunning = true
+    return true
+  }
+
+  function finishSetup() {
+    setupRunning = false
+  }
+
+  function checkSetupRunning() {
+    if (!setupLockProcess.running) setupLockProcess.running = true
   }
 
   function refresh() {
@@ -288,6 +305,17 @@ Item {
       } catch (error) {
         root.lastError = "Could not parse the HEY Screener count"
       }
+    }
+  }
+
+  Process {
+    id: setupLockProcess
+    running: false
+    command: ["flock", "-n", root.setupLockPath, "true"]
+    onExited: function(exitCode) {
+      // Exit 0 acquired the lock, so no setup process holds it. Any other
+      // result fails closed and keeps duplicate authentication blocked.
+      root.setupRunning = exitCode !== 0
     }
   }
 

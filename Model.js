@@ -1,3 +1,23 @@
+var setupLockFilename = "37signals.hey.setup.lock"
+
+function setupLockPath(runtimeDir) {
+  return String(runtimeDir || "/tmp").replace(/\/+$/, "") + "/" + setupLockFilename
+}
+
+function shellQuote(value) {
+  return "'" + String(value || "").replace(/'/g, "'\\''") + "'"
+}
+
+function setupLaunchCommand(fix, ipcTarget) {
+  var target = shellQuote(ipcTarget)
+  var completion = "omarchy-shell -q \"$target\" setupFinished"
+  return "target=" + target + "; lock=\"${XDG_RUNTIME_DIR:-/tmp}/" + setupLockFilename + "\"; "
+    + "( flock -n 9 || { printf '%s\\n' 'HEY setup is already running.'; exit 75; }; "
+    + "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
+    + "trap 'rc=$?; trap - EXIT; flock -u 9; " + completion + "; exit $rc' EXIT; "
+    + String(fix || "") + " ) 9>\"$lock\""
+}
+
 function setupPlan(installed, authenticated, ipcTarget) {
   var plan = {
     needed: installed !== true || authenticated !== true,
@@ -12,7 +32,7 @@ function setupPlan(installed, authenticated, ipcTarget) {
     plan.buttonLabel = "Install HEY CLI…"
     plan.fix = "omarchy-pkg-aur-add hey-cli && hey auth login"
   }
-  plan.launchCommand = plan.fix + "; rc=$?; omarchy-shell -q " + String(ipcTarget || "") + " refresh; (exit $rc)"
+  plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
   return plan
 }
 
@@ -159,6 +179,8 @@ function notificationMeta(item, nowMs) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    setupLockPath: setupLockPath,
+    setupLaunchCommand: setupLaunchCommand,
     setupPlan: setupPlan,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,
