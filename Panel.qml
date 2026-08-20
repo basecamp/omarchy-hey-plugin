@@ -99,6 +99,20 @@ Panel {
     return "No previously seen email."
   }
 
+  readonly property bool needsSetup: service.probed && (!service.installed || !service.authenticated)
+  readonly property string setupCommand: {
+    if (!service.installed) return "omarchy pkg add hey-cli"
+    return "hey auth login"
+  }
+  readonly property string setupTitle: {
+    if (!service.installed) return "HEY CLI is required"
+    return "Please sign in"
+  }
+  readonly property string setupHint: {
+    if (!service.installed) return "Press R to retry after install completes."
+    return "After you authenticate, press R to retry."
+  }
+
   function typeColor(type) {
     var value = String(type || "").toLowerCase()
     if (value.indexOf("calendar") !== -1 || value.indexOf("invite") !== -1) return Color.muted
@@ -376,7 +390,7 @@ Panel {
 
           Dropdown {
             id: accountDropdown
-            visible: service.accountCount > 1
+            visible: service.accountCount > 1 && !root.needsSetup
             width: parent.width
             showLabel: false
             options: root.accountDropdownOptions
@@ -404,6 +418,7 @@ Panel {
           }
 
           RowLayout {
+            visible: !root.needsSetup
             width: parent.width
             spacing: Style.space(2)
 
@@ -468,8 +483,84 @@ Panel {
             width: panelFlick.width
             spacing: Style.space(12)
 
+            Column {
+              visible: root.needsSetup
+              width: parent.width
+              spacing: Style.space(8)
+              topPadding: Style.space(16)
+              bottomPadding: Style.space(18)
+
+              Text {
+                width: parent.width
+                text: root.setupTitle
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+              }
+
+              Item {
+                width: parent.width
+                implicitHeight: setupCommandRow.implicitHeight + Style.space(4)
+
+                Row {
+                  id: setupCommandRow
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(6)
+
+                  Text {
+                    text: root.setupCommand
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "󰆏"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+                }
+
+                MouseArea {
+                  id: setupCommandMouse
+                  anchors.fill: setupCommandRow
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupCommand) + " | wl-copy"])
+                    setupCopiedTimer.restart()
+                  }
+                }
+
+                PanelToolTip {
+                  visible: setupCommandMouse.containsMouse
+                  text: setupCopiedTimer.running ? "Copied" : "Copy to clipboard"
+                  fontFamily: root.fontFamily
+                }
+
+                Timer {
+                  id: setupCopiedTimer
+                  interval: 1500
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: root.setupHint
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                horizontalAlignment: Text.AlignHCenter
+              }
+            }
+
             Text {
-              visible: !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
               width: parent.width
               text: root.emptyMessage()
               color: root.dim
@@ -482,7 +573,7 @@ Panel {
 
             Column {
               id: notificationColumn
-              visible: root.filteredNotifications.length > 0
+              visible: !root.needsSetup && root.filteredNotifications.length > 0
               width: parent.width
               spacing: Style.space(8)
 

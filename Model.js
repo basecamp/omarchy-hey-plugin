@@ -1,14 +1,21 @@
 function parseJson(raw) {
   var text = String(raw || "").trim()
-  if (text === "") return { ok: false, error: "The HEY CLI returned no data" }
+  if (text === "") return { ok: false, error: "The HEY CLI returned no data", code: "" }
 
   try {
     var parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== "object") return { ok: false, error: "The HEY CLI returned invalid data" }
-    if (parsed.ok === false) return { ok: false, error: cleanText(parsed.error || parsed.message || "The HEY CLI request failed") }
+    if (!parsed || typeof parsed !== "object") return { ok: false, error: "The HEY CLI returned invalid data", code: "" }
+    if (parsed.ok === false) {
+      return {
+        ok: false,
+        error: cleanText(parsed.error || parsed.message || "The HEY CLI request failed"),
+        code: String(parsed.code || ""),
+        hint: cleanText(parsed.hint || "")
+      }
+    }
     return { ok: true, value: parsed }
   } catch (error) {
-    return { ok: false, error: "Could not parse the HEY CLI response" }
+    return { ok: false, error: "Could not parse the HEY CLI response", code: "" }
   }
 }
 
@@ -198,6 +205,7 @@ function notificationMeta(item, nowMs, showAccount) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    parseJson: parseJson,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,

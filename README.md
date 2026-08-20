@@ -19,6 +19,8 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 
 - Omarchy with Quickshell plugin support.
 - A current [HEY CLI](https://github.com/basecamp/hey-cli) build with the `seen` and `accounts` commands. With an older CLI, the plugin still works but hides the account switcher.
+
+When the HEY CLI is missing or signed out, the panel shows the setup step to run. Click the command to copy it, run it in a terminal, and press `R` in the panel to retry.
 - An authenticated HEY CLI login.
 
 The current HEY CLI requires Go 1.26 or newer. Until a current package is published, install it from source using the CLI's supported installation process:

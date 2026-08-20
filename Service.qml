@@ -9,6 +9,8 @@ Item {
   property var settings: ({})
   property bool refreshing: false
   property bool installed: true
+  property bool authenticated: true
+  property bool probed: false
   property var accounts: []
   property var notifications: []
   property int unreadCount: 0
@@ -21,6 +23,7 @@ Item {
   readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
   readonly property int accountCount: accounts.length
 
+  property string _probeOutput: ""
   property string _accountsOutput: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
@@ -53,10 +56,42 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || accountsProcess.running || notificationProcess.running || screenerProcess.running) return
+    if (refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running) return
     refreshing = true
-    installed = true
     lastError = ""
+    // Probe on every refresh: a bare `hey` process would never emit
+    // `exited` if the binary vanished since the last check, sticking
+    // `refreshing` forever. The probe's bash wrapper always exits.
+    _probeOutput = ""
+    probeProcess.running = true
+  }
+
+  function finishProbe(stdout) {
+    probed = true
+    var text = String(stdout || "")
+    if (text.trim() === "missing") {
+      installed = false
+      refreshing = false
+      return
+    }
+    installed = true
+
+    // Only a well-formed `auth status` success is authoritative for the
+    // authenticated flag. Errors and garbage get the error line instead —
+    // telling the user to log in can't fix those.
+    var result = Model.parseJson(text)
+    if (!result.ok || !result.value.data) {
+      authenticated = true
+      lastError = conciseError("Could not check the HEY CLI: " + (result.error || "unexpected response"))
+      refreshing = false
+      return
+    }
+    authenticated = result.value.data.authenticated === true
+    if (!authenticated) {
+      refreshing = false
+      return
+    }
+
     _accountsOutput = ""
     _screenerOutput = ""
     _screenerError = ""
@@ -155,6 +190,22 @@ Item {
   }
 
   Process {
+    id: probeProcess
+    running: false
+    // bash always exists, so `exited` always fires — a bare `hey`
+    // command would silently never exit when the binary is missing.
+    command: ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey auth status --json"]
+    stdout: StdioCollector {
+      id: probeStdout
+      waitForEnd: true
+      onStreamFinished: root._probeOutput = text
+    }
+    onExited: function(exitCode) {
+      root.finishProbe(String(probeStdout.text || root._probeOutput || ""))
+    }
+  }
+
+  Process {
     id: accountsProcess
     running: false
     command: ["hey", "accounts", "list", "--json"]
@@ -165,6 +216,11 @@ Item {
     }
     onExited: function(exitCode) {
       var stdout = String(accountsStdout.text || root._accountsOutput || "")
+      if (exitCode !== 0 && Model.parseJson(stdout).code === "auth_required") {
+        root.authenticated = false
+        root.refreshing = false
+        return
+      }
       var parsed = exitCode === 0 ? Model.parseAccounts(stdout) : { ok: false, accounts: [] }
       // An older CLI has no `accounts` command and no `--account` flag.
       // Fall back to a single merged Imbox instead of failing the refresh.
@@ -191,9 +247,12 @@ Item {
       var stdout = String(notificationsStdout.text || root._notificationsOutput || "")
       var stderr = String(notificationsStderr.text || root._notificationsError || "")
       if (exitCode !== 0) {
-        root.installed = exitCode !== 127
-        root.lastError = root.conciseError(stderr || stdout,
-          root.installed ? "Could not list HEY emails" : "HEY CLI is not installed")
+        if (Model.parseJson(stdout).code === "auth_required") {
+          root.authenticated = false
+          root.refreshing = false
+          return
+        }
+        root.lastError = root.conciseError(stderr || stdout, "Could not list HEY emails")
         root.refreshing = false
         return
       }
