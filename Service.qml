@@ -9,6 +9,7 @@ Item {
   property var settings: ({})
   property bool refreshing: false
   property bool installed: true
+  property bool probed: false
   property var accounts: []
   property var notifications: []
   property int unreadCount: 0
@@ -21,6 +22,7 @@ Item {
   readonly property int maxPerAccount: intSetting("maxNotifications", 50, 10, 100)
   readonly property int accountCount: 0
 
+  property string _probeOutput: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
   property string _screenerOutput: ""
@@ -52,10 +54,22 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || notificationProcess.running || screenerProcess.running) return
+    if (refreshing || probeProcess.running || notificationProcess.running || screenerProcess.running) return
     refreshing = true
-    installed = true
     lastError = ""
+    _probeOutput = ""
+    probeProcess.running = true
+  }
+
+  function finishProbe(stdout) {
+    probed = true
+    if (String(stdout || "").trim() === "missing") {
+      installed = false
+      refreshing = false
+      return
+    }
+
+    installed = true
     _notificationsOutput = ""
     _notificationsError = ""
     _screenerOutput = ""
@@ -152,6 +166,22 @@ Item {
   }
 
   Process {
+    id: probeProcess
+    running: false
+    // The bash wrapper always exits. A missing executable does not reliably
+    // emit `exited` when it is started directly by Quickshell.
+    command: ["bash", "-c", "command -v hey >/dev/null 2>&1 && echo installed || echo missing"]
+    stdout: StdioCollector {
+      id: probeStdout
+      waitForEnd: true
+      onStreamFinished: root._probeOutput = text
+    }
+    onExited: function(exitCode) {
+      root.finishProbe(String(probeStdout.text || root._probeOutput || ""))
+    }
+  }
+
+  Process {
     id: notificationProcess
     running: false
     command: []
@@ -169,9 +199,7 @@ Item {
       var stdout = String(notificationsStdout.text || root._notificationsOutput || "")
       var stderr = String(notificationsStderr.text || root._notificationsError || "")
       if (exitCode !== 0) {
-        root.installed = exitCode !== 127
-        root.lastError = root.conciseError(stderr || stdout,
-          root.installed ? "Could not list HEY emails" : "HEY CLI is not installed")
+        root.lastError = root.conciseError(stderr || stdout, "Could not list HEY emails")
         root.refreshing = false
         return
       }

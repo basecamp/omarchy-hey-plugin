@@ -55,6 +55,11 @@ Panel {
     return "No email to show."
   }
 
+  readonly property bool needsSetup: service.probed && !service.installed
+  readonly property string setupCommand: "omarchy pkg aur add hey-cli"
+  readonly property string setupTitle: "HEY CLI is required"
+  readonly property string setupHint: "Press R to retry after install completes."
+
   function accountUnreadCount(accountId) {
     var id = String(accountId || "")
     if (id === "") return 0
@@ -162,6 +167,8 @@ Panel {
         stateFilter: root.stateFilter,
         accountFilter: root.accountFilter,
         refreshing: service.refreshing,
+        installed: service.installed,
+        probed: service.probed,
         error: service.lastError
       })
     }
@@ -255,6 +262,7 @@ Panel {
               }
 
               Row {
+                visible: !root.needsSetup
                 spacing: Style.space(2)
 
                 Button {
@@ -392,6 +400,7 @@ Panel {
           }
 
           PanelSectionHeader {
+            visible: !root.needsSetup
             text: "IMBOX"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -415,8 +424,84 @@ Panel {
             width: panelFlick.width
             spacing: Style.space(12)
 
+            Column {
+              visible: root.needsSetup
+              width: parent.width
+              spacing: Style.space(8)
+              topPadding: Style.space(16)
+              bottomPadding: Style.space(18)
+
+              Text {
+                width: parent.width
+                text: root.setupTitle
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+              }
+
+              Item {
+                width: parent.width
+                implicitHeight: setupCommandRow.implicitHeight + Style.space(4)
+
+                Row {
+                  id: setupCommandRow
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(6)
+
+                  Text {
+                    text: root.setupCommand
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "󰆏"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+                }
+
+                MouseArea {
+                  id: setupCommandMouse
+                  anchors.fill: setupCommandRow
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(root.setupCommand) + " | wl-copy"])
+                    setupCopiedTimer.restart()
+                  }
+                }
+
+                PanelToolTip {
+                  visible: setupCommandMouse.containsMouse
+                  text: setupCopiedTimer.running ? "Copied" : "Copy to clipboard"
+                  fontFamily: root.fontFamily
+                }
+
+                Timer {
+                  id: setupCopiedTimer
+                  interval: 1500
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: root.setupHint
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                horizontalAlignment: Text.AlignHCenter
+              }
+            }
+
             Text {
-              visible: !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
             width: parent.width
             text: root.emptyMessage()
             color: root.dim
@@ -428,7 +513,7 @@ Panel {
           }
 
           Text {
-            visible: service.refreshing && service.notifications.length === 0
+            visible: !root.needsSetup && service.refreshing && service.notifications.length === 0
             width: parent.width
             text: "Loading email…"
             color: root.dim
@@ -441,7 +526,7 @@ Panel {
 
           Column {
             id: notificationColumn
-            visible: root.filteredNotifications.length > 0
+            visible: !root.needsSetup && root.filteredNotifications.length > 0
             width: parent.width
             spacing: Style.space(8)
 

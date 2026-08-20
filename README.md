@@ -19,16 +19,11 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - A current [HEY CLI](https://github.com/basecamp/hey-cli) build with the `seen` command.
 - An authenticated HEY CLI login.
 
-The current HEY CLI requires Go 1.26 or newer. Until a current package is published, install it from source using the CLI's supported installation process:
+Install the HEY CLI from the AUR on Omarchy:
 
 ```bash
-git clone https://github.com/basecamp/hey-cli.git
-cd hey-cli
-mise install
-make install
+omarchy pkg aur add hey-cli
 ```
-
-`make install` builds the CLI and installs `hey` into `/usr/local/bin`.
 
 Authenticate and confirm that the CLI can see your Imbox:
 
