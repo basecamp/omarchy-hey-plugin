@@ -34,10 +34,16 @@ test("setupLockPath uses the runtime directory with a safe fallback", () => {
   assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
 })
 
-test("pollCommand asks hey omarchy poll for the panel's threads", () => {
-  assert.deepEqual(Model.pollCommand(50, false, false), ["hey", "omarchy", "poll", "--limit", "50", "--json"])
-  assert.deepEqual(Model.pollCommand(20, true, true), ["hey", "omarchy", "poll", "--account", "all", "--limit", "20", "--json", "--notify"])
-  assert.deepEqual(Model.pollCommand("garbage", false, "true"), ["hey", "omarchy", "poll", "--limit", "50", "--json"])
+test("boxCommand reads the Imbox for the panel's threads", () => {
+  assert.deepEqual(Model.boxCommand(50, false), ["hey", "box", "imbox", "--limit", "50", "--json"])
+  assert.deepEqual(Model.boxCommand(20, true), ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
+  assert.deepEqual(Model.boxCommand("garbage", false), ["hey", "box", "imbox", "--limit", "50", "--json"])
+})
+
+test("watchCommand follows every box, tied to the shell, toasting only when asked", () => {
+  assert.deepEqual(Model.watchCommand(false), ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+  assert.deepEqual(Model.watchCommand(true), ["setpriv", "--pdeathsig", "TERM", "hey", "watch", "--notify"])
+  assert.deepEqual(Model.watchCommand("true"), ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
 })
 
 test("parseFailure reads the CLI's error envelope from stderr", () => {
@@ -50,9 +56,9 @@ test("parseFailure reads the CLI's error envelope from stderr", () => {
   assert.equal(Model.parseFailure("", "").code, "")
 })
 
-test("cliTooOld recognizes a CLI without hey omarchy poll", () => {
-  assert.equal(Model.cliTooOld("", 'Error: unknown command "omarchy" for "hey"'), true)
-  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --limit","code":"usage"}'), true)
+test("cliTooOld recognizes a CLI without hey watch --notify", () => {
+  assert.equal(Model.cliTooOld("", 'Error: unknown command "watch" for "hey"'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --notify","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
   assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })

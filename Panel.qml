@@ -63,8 +63,23 @@ Panel {
     if (service.actionStatus !== "") return service.actionStatus
     if (service.lastError !== "") return service.lastError
     if (rotatingPhrases) return loadingPhrases[phraseIndex % loadingPhrases.length]
+    if (!service.connected && service.watchError !== "") return "Live updates paused — " + service.watchError
     return "Designed & built by 37signals"
   }
+
+  // One service per shell: the shell instantiates Service.qml once for the
+  // plugin and every bar widget — one per monitor — reads that instance, so
+  // one `hey watch` runs however many bars there are. A shell without service
+  // support gets a widget-local instance instead.
+  readonly property var sharedService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+    ? bar.shell.serviceFor(moduleName) : null
+  readonly property var service: sharedService || localService
+
+  // The shell injects settings into widgets, not services: push them across.
+  function pushSettings() { if (service) service.settings = settings }
+  onSettingsChanged: pushSettings()
+  onServiceChanged: pushSettings()
+  Component.onCompleted: pushSettings()
 
   function ensureAccountFilter() {
     if (accountFilter === "") return
@@ -115,11 +130,15 @@ Panel {
 
   function refreshService() { service.refresh() }
 
-  // The bar is built once per monitor, so an IPC target names whichever
-  // instance claimed it. A refresh asked for over IPC — `hey tui` after it
-  // archived a thread — is fanned out to every live instance, the way the
-  // shell's own BarWidget.broadcast does.
+  // With the service shared, one refresh is the refresh. Under a shell without
+  // service support the bar — built once per monitor — holds a widget-local
+  // service per instance, and a refresh asked for over IPC is fanned out to
+  // every live one, the way the shell's own BarWidget.broadcast does.
   function broadcastRefresh() {
+    if (sharedService) {
+      sharedService.refresh()
+      return
+    }
     var items = bar && typeof bar.moduleWidgets === "function" ? bar.moduleWidgets(moduleName) : [root]
     for (var i = 0; i < items.length; i++) {
       if (items[i] && typeof items[i].refreshService === "function") items[i].refreshService()
@@ -276,9 +295,13 @@ Panel {
   }
 
   Service {
-    id: service
-    settings: root.settings
-    onAccountsChanged: root.ensureAccountFilter()
+    id: localService
+    active: root.sharedService === null
+  }
+
+  Connections {
+    target: root.service
+    function onAccountsChanged() { root.ensureAccountFilter() }
   }
 
   Timer {
@@ -339,6 +362,8 @@ Panel {
         stateFilter: root.stateFilter,
         accountFilter: root.accountFilter,
         refreshing: service.refreshing,
+        connected: service.connected,
+        watchError: service.watchError,
         palette: root.avatarPalette.length,
         error: service.lastError
       })
@@ -361,6 +386,7 @@ Panel {
     tooltipText: service.refreshing
       ? "Refreshing HEY email"
       : (service.unreadCount === 1 ? "1 unread HEY email" : service.unreadCount + " unread HEY emails")
+        + (service.connected ? " · live" : "")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
       else root.toggle()

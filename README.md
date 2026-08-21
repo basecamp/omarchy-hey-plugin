@@ -10,16 +10,17 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - Switches between accounts with a dropdown that shows the unread count per account.
 - Splits email into `New for you` and `Previously seen` tabs.
 - Shows the pending Screener count without including it in the unread count.
-- Toasts new Imbox mail when you turn notifications on — one notification per poll at most, replaced rather than stacked, silenced by Omarchy's notification toggle.
+- Updates live: the panel and the logo follow your Imbox as it changes, over HEY's own change feed — a thread you archive in `hey tui`, on your phone or in the web app leaves the panel within a second.
+- Toasts new mail when you turn notifications on — one notification per batch of changes at most, replaced rather than stacked, silenced by Omarchy's notification toggle.
 - Shows sender initials in a colored avatar on each email row.
 - Opens email topics in HEY and marks unseen postings as seen.
 - Changes the bar logo color when unseen email exists.
-- Polls every 10 minutes. Right-click or middle-click the bar logo to refresh immediately; `hey tui` refreshes it the moment you archive or mark a thread.
+- Re-reads the Imbox every 10 minutes as a safety net. Right-click or middle-click the bar logo to refresh immediately.
 
 ## Requirements
 
 - Omarchy with Quickshell plugin support.
-- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.0 or newer — the plugin runs its `hey omarchy poll` command. It is on the AUR:
+- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.0 or newer — the plugin runs `hey box imbox` and `hey watch`, with `hey watch --notify` for the toasts. It is on the AUR:
 
   ```bash
   omarchy pkg aur add hey-cli
@@ -27,7 +28,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 
 - An authenticated HEY CLI login.
 
-When the HEY CLI is missing or signed out, the panel shows a setup button. Click it to run the install or sign-in in a floating terminal. The panel detects completion on its own. You can also copy the shown command and run it yourself. An older CLI without `hey omarchy poll` is reported in the panel header.
+When the HEY CLI is missing or signed out, the panel shows a setup button. Click it to run the install or sign-in in a floating terminal. The panel detects completion on its own. You can also copy the shown command and run it yourself. An older CLI without `hey watch --notify` is reported in the panel header.
 
 Authenticate and confirm that the CLI can see your Imbox:
 
@@ -64,16 +65,22 @@ The plugin manifest declares the right bar section as its default placement.
 - Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
 - Press `U` for new email, `P` for previously seen email, `S` for the Screener, `N` to toggle notifications, or `R` to refresh.
 
+## Live updates
+
+The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey watch` follows every HEY box over HEY's cable and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, folding a burst of changes into one read. The watch starts before the first read, so nothing falls between the two, and after a disconnect — a suspended laptop, a dropped network — it catches up from its own cursor, so the panel is current within seconds of coming back. The 10-minute re-read stays only as a safety net.
+
+The bar logo's tooltip says `live` while the watch is connected. When the watch stops for a reason other than being signed out, the panel header says so and the plugin restarts it on a backoff (two seconds, doubling to a minute); signed out, it waits for you to sign in again.
+
 ## Notifications
 
-Off by default. The switch in the panel header turns new-mail toasts on; so do `hey setup omarchy --notify` and `omarchy bar set 37signals.hey notify true --json` — all three flip the `notify` key on the plugin's entry in `~/.config/omarchy/shell.json`, which the shell hot-reloads.
+Off by default. The switch in the panel header turns new-mail toasts on; so do `hey setup omarchy --notify` and `omarchy bar set 37signals.hey notify true --json` — all three flip the `notify` key on the plugin's entry in `~/.config/omarchy/shell.json`, which the shell hot-reloads. Flipping it restarts the watch with or without `--notify`; no shell restart.
 
-When on, the plugin passes `--notify` to `hey omarchy poll` and the CLI sends the toast itself through `omarchy-notification-send`:
+When on, the plugin runs `hey watch --notify` and the CLI sends the toast itself through `notify-send`:
 
-- At most one toast per poll — `Sender — Subject` for one new thread, `N new in Imbox` with the first few senders for more — replacing the previous toast rather than stacking.
-- New means a thread you have not been told about, or a known unseen thread that grew; muted threads never toast. The first poll after turning notifications on seeds silently, so the backlog is never toasted.
+- At most one toast per batch of changes — `Sender — Subject` for one new thread, `N new in Imbox` with the first few senders for more — replacing the previous toast rather than stacking.
+- New means an unseen, unmuted thread that arrived, or one with a reply newer than the watch last saw; reading a thread, marking it unseen again or moving it never toasts. The watch's first read of a box is its backlog and is never toasted.
 - The toast identifies as HEY, so SUPER+CTRL+comma (Omarchy's notification silencing) mutes it like any other app. Clicking it focuses `hey tui`.
-- On a multi-monitor desktop every bar instance polls, but the CLI serializes the diff under a lock, so one new thread is one toast.
+- One watch per shell means one toast per change, however many monitors.
 
 ## Privacy and security
 
@@ -82,13 +89,14 @@ The plugin runs these local CLI commands:
 ```text
 hey auth status --json
 hey accounts list --json
-hey omarchy poll --account all --limit <count> [--notify] --json
+hey box imbox --account all --limit <count> --json
+hey watch [--notify]
 hey screener list --count --json
 hey seen <posting-id> --json
 flock -n $XDG_RUNTIME_DIR/37signals.hey.setup.lock true
 ```
 
-Email data is held in the Quickshell process memory. The plugin does not write email content, credentials, or tokens to disk, and never handles a token at all. With notifications on, the CLI keeps the fingerprints of the unseen threads it has already announced in `~/.local/state/hey-cli/omarchy-poll.json` — thread ids and reply counts, no content — and forgets them when notifications are turned off.
+`hey watch` is run under `setpriv --pdeathsig TERM`, so it ends with the shell that started it. Email data is held in the Quickshell process memory. The plugin does not write email content, credentials, or tokens to disk, and never handles a token at all; the watch keeps no state file either.
 
 ## License
 

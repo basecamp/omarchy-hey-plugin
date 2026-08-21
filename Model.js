@@ -81,20 +81,28 @@ function isAuthError(code) {
 var minimumCliVersion = "0.2.0"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
 
-// An older CLI has no `omarchy poll`: a release before the `omarchy` group
-// reports an unknown command, a build with the group but without `poll`
-// trips over the first flag instead. The plugin only ever passes fixed
-// flags, so either one means the CLI is too old.
+// An older CLI trips over a flag it does not have — `hey watch --notify` is
+// 0.2.0 — and a release older still reports an unknown command. The plugin
+// only ever passes fixed flags, so either one means the CLI is too old.
 function cliTooOld(stdout, stderr) {
   return /unknown (command|flag)/i.test(String(stderr || "") + String(stdout || ""))
 }
 
-// hey omarchy poll takes the panel's thread limit and, when the bar entry
-// asks for toasts, --notify; --account all only once the CLI has shown it
-// knows accounts.
-function pollCommand(limit, withAccountFilter, notify) {
-  var command = ["hey", "omarchy", "poll", "--limit", String(positiveInteger(limit, 50)), "--json"]
+// hey box imbox is the read: the panel's thread limit, and --account all once
+// the CLI has shown it knows accounts, so a persisted `hey accounts use`
+// filter cannot hide mail from the panel.
+function boxCommand(limit, withAccountFilter) {
+  var command = ["hey", "box", "imbox", "--limit", String(positiveInteger(limit, 50)), "--json"]
   if (withAccountFilter) command.splice(3, 0, "--account", "all")
+  return command
+}
+
+// hey watch is the wake-up: it follows every box over HEY's cable and prints
+// a line per change. setpriv --pdeathsig ties it to the shell, so a shell that
+// dies takes its watch along instead of leaving one behind per restart. With
+// --notify the watch sends the new-mail toasts itself.
+function watchCommand(notify) {
+  var command = ["setpriv", "--pdeathsig", "TERM", "hey", "watch"]
   if (notify === true) command.push("--notify")
   return command
 }
@@ -350,7 +358,8 @@ if (typeof module !== "undefined") {
     isAuthError: isAuthError,
     cliTooOld: cliTooOld,
     cliTooOldMessage: cliTooOldMessage,
-    pollCommand: pollCommand,
+    boxCommand: boxCommand,
+    watchCommand: watchCommand,
     parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,

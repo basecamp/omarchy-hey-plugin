@@ -3,13 +3,22 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
+// The plugin's engine, instantiated once per shell as its `service` entry
+// point; every bar widget — one per monitor — reads this one instance, so one
+// `hey watch` runs however many bars there are. Panels push their settings in,
+// since the shell injects settings into widgets only.
 Item {
   id: root
 
+  property var shell: null
   property var settings: ({})
+  // A widget-local instance, built only under a shell without service
+  // support, must stay inert once a shared one exists: two watches and two
+  // refresh cycles per bar otherwise.
+  property bool active: true
   property bool refreshing: false
-  // A refresh asked for mid-fetch — the TUI's IPC nudge after it archived a
-  // thread, say — is not dropped: it runs once the current one settles.
+  // A refresh asked for mid-fetch — a watch event landing during one, say — is
+  // not dropped: it runs once the current one settles.
   property bool refreshPending: false
   property bool installed: true
   property bool authenticated: true
@@ -31,13 +40,28 @@ Item {
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 600, 60, 3600)
   readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
-  // New-mail toasts, sent by `hey omarchy poll --notify` itself: one per poll
-  // at most, replacing the previous one, identified as HEY so Omarchy's
+  // New-mail toasts, sent by `hey watch --notify` itself: one per batch of
+  // changes at most, replacing the previous one, identified as HEY so Omarchy's
   // notification silencing applies. Off unless the bar entry says true.
   readonly property bool notify: setting("notify", false) === true
   readonly property int accountCount: accounts.length
   // Every process a refresh drives; a pending refresh waits for all of them.
   readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
+
+  // The watch: `hey watch` follows every box over HEY's cable and prints a line
+  // per change. A line is a wake-up — the Imbox is re-read, coalesced — not a
+  // delta. It watches every box because a move out of the Imbox is written in
+  // the box the thread went to, never in the Imbox's own feed. It starts once
+  // the probe says the CLI is signed in, and before the Imbox is read, so
+  // nothing can change between the two; after a disconnect it catches up from
+  // its own cursor, so a laptop back from suspend is current within seconds.
+  readonly property bool connected: watchProcess.running
+  readonly property bool watchRestartScheduled: watchRestartTimer.running
+  property string watchError: ""
+  property int watchRestartMs: 0
+  property double watchStartedAtMs: 0
+  property bool restartWatch: false
+  property string _watchLastStderr: ""
 
   property string _probeOutput: ""
   property string _accountsOutput: ""
@@ -87,6 +111,7 @@ Item {
   }
 
   function refresh() {
+    if (!active) return
     if (busy) {
       refreshPending = true
       return
@@ -107,6 +132,7 @@ Item {
     if (text.trim() === "missing") {
       installed = false
       refreshing = false
+      stopWatch()
       return
     }
     installed = true
@@ -125,9 +151,13 @@ Item {
     authenticated = result.value.data.authenticated === true
     if (!authenticated) {
       refreshing = false
+      stopWatch()
       return
     }
 
+    // Watch first, read second: anything that changed before the watch's
+    // cursor is in the read, anything after it wakes the watch.
+    startWatch()
     _accountsOutput = ""
     _accountsError = ""
     _screenerOutput = ""
@@ -139,13 +169,59 @@ Item {
   function fetchNotifications(withAccountFilter) {
     _notificationsOutput = ""
     _notificationsError = ""
-    // One Imbox read serves the panel and the toasts. The CLI answers in the
-    // shape of `hey box imbox --json` and, with --notify, diffs the unseen
-    // threads against its own fingerprints and sends the toast itself.
-    // Always fetch every linked account so a persisted `hey accounts use`
-    // filter cannot hide mail from the panel.
-    notificationProcess.command = Model.pollCommand(maxNotifications, withAccountFilter, notify)
+    notificationProcess.command = Model.boxCommand(maxNotifications, withAccountFilter)
     notificationProcess.running = true
+  }
+
+  function startWatch() {
+    if (!active || !probed || !installed || !authenticated || watchProcess.running) return
+    watchRestartTimer.stop()
+    _watchLastStderr = ""
+    watchError = ""
+    watchStartedAtMs = Date.now()
+    watchProcess.command = Model.watchCommand(notify)
+    watchProcess.running = true
+  }
+
+  function stopWatch() {
+    watchRestartTimer.stop()
+    if (watchProcess.running) watchProcess.running = false
+  }
+
+  // Any line from the watch is a wake-up. A burst of changes lands while a
+  // refresh is running, and refresh() folds it into one follow-up.
+  function watchEvent(line) {
+    if (String(line || "").trim() === "") return
+    watchError = ""
+    refresh()
+  }
+
+  function watchExited(exitCode) {
+    if (restartWatch) {
+      restartWatch = false
+      startWatch()
+      return
+    }
+    var stderr = _watchLastStderr
+    var failure = Model.parseFailure("", stderr)
+    if (Model.isAuthError(failure.code)) {
+      // Signed out: the next probe that says otherwise starts the watch again.
+      authenticated = false
+      return
+    }
+    if (Model.cliTooOld("", stderr)) {
+      // Nothing to retry until the CLI is upgraded; the next refresh's probe
+      // tries again, by which time it may have been.
+      lastError = Model.cliTooOldMessage
+      watchError = Model.cliTooOldMessage
+      return
+    }
+    watchError = conciseError(failure.error || stderr, "HEY live updates stopped")
+    // A run that lasted a while resets the backoff; a quick exit doubles it.
+    var ranForMs = Date.now() - watchStartedAtMs
+    watchRestartMs = ranForMs > 60000 ? 2000 : Math.min(60000, Math.max(2000, watchRestartMs * 2))
+    watchRestartTimer.interval = watchRestartMs
+    watchRestartTimer.restart()
   }
 
   function finishRefresh(items) {
@@ -204,9 +280,18 @@ Item {
     readProcess.running = true
   }
 
-  // Turning toasts on or off takes effect on the next poll; make that now
-  // rather than up to ten minutes away.
-  onNotifyChanged: refresh()
+  // Flipping the toasts restarts the watch with or without --notify; the exit
+  // handler starts the new one at once. No shell restart, no waiting.
+  onNotifyChanged: {
+    if (watchProcess.running) {
+      restartWatch = true
+      watchProcess.running = false
+    } else {
+      startWatch()
+    }
+  }
+
+  onActiveChanged: if (!active) stopWatch()
 
   onBusyChanged: {
     if (busy || !refreshPending) return
@@ -214,13 +299,35 @@ Item {
     refresh()
   }
 
+  // The timer is the safety net under the watch, not the mechanism.
   Timer {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
     repeat: true
-    running: true
+    running: root.active
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: watchRestartTimer
+    repeat: false
+    onTriggered: root.startWatch()
+  }
+
+  Process {
+    id: watchProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      onRead: function(data) { root.watchEvent(data) }
+    }
+    // Only the last line matters: the CLI's error envelope when the watch
+    // exits. A collector would hold a long run's warnings in memory for days.
+    stderr: SplitParser {
+      onRead: function(data) { root._watchLastStderr = String(data) }
+    }
+    onExited: function(exitCode, exitStatus) { root.watchExited(exitCode) }
   }
 
   Timer {
@@ -388,8 +495,10 @@ Item {
       }
       root.actionStatusTimer.restart()
       root._readingNotification = null
+      // The cable reports our own mark-as-seen back within a second; the
+      // delayed re-read is for when nothing is listening.
       if (root._readQueue.length > 0) root.runNextRead()
-      else root.refreshAfterRead.restart()
+      else if (!root.connected) root.refreshAfterRead.restart()
     }
   }
 }

@@ -5,16 +5,18 @@
   "version": "0.3.0",
   "author": "37signals",
   "license": "MIT",
-  "description": "Unread email and new-mail notifications from HEY through the HEY CLI.",
+  "description": "Unread email from HEY, live over HEY's cable, with new-mail notifications — through the HEY CLI.",
   "kinds": [
+    "service",
     "bar-widget"
   ],
   "entryPoints": {
+    "service": "Service.qml",
     "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "HEY",
-    "description": "Unread count and recent email from the HEY Imbox across linked accounts.",
+    "description": "Unread count and recent email from the HEY Imbox across linked accounts, updated as it changes.",
     "category": "Communication",
     "aliases": [
       "hey",
