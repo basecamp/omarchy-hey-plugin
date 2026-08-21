@@ -81,9 +81,10 @@ function isAuthError(code) {
 var minimumCliVersion = "0.2.0"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
 
-// An older CLI trips over a flag it does not have — `hey watch --notify` is
-// 0.2.0 — and a release older still reports an unknown command. The plugin
-// only ever passes fixed flags, so either one means the CLI is too old.
+// An older CLI trips over a flag it does not have — `hey box --account` is
+// 0.2.0 — and a release older still has no `hey watch` and reports an unknown
+// command. The plugin only ever passes fixed flags, so either one means the
+// CLI is too old.
 function cliTooOld(stdout, stderr) {
   return /unknown (command|flag)/i.test(String(stderr || "") + String(stdout || ""))
 }
@@ -100,26 +101,124 @@ function boxCommand(limit, withAccountFilter) {
 // hey watch is the wake-up: it follows every box over HEY's cable and prints
 // a line per change, plus "ready", "disconnected" and "resync" about itself.
 // setpriv --pdeathsig ties it to the shell, so a shell that dies takes its
-// watch along instead of leaving one behind per restart. With --notify the
-// watch sends the new-mail toasts itself — for the Imbox, its default.
-function watchCommand(notify) {
-  var command = ["setpriv", "--pdeathsig", "TERM", "hey", "watch"]
-  if (notify === true) command.push("--notify")
-  return command
+// watch along instead of leaving one behind per restart. It watches every box
+// — a move out of the Imbox is written in the box the thread went to — and
+// says on every added and updated line whether the posting is new mail.
+function watchCommand() {
+  return ["setpriv", "--pdeathsig", "TERM", "hey", "watch"]
 }
 
-// watchLineChange reads the `change` of one line from hey watch: added, updated
-// or deleted for a thread; ready, disconnected or resync about the watch. A line
-// that is not JSON — there are none, but stdout is stdout — counts as a change.
-function watchLineChange(line) {
+// watchLine reads one line from hey watch: its change — added, updated or
+// deleted for a thread; ready, disconnected or resync about the watch — and,
+// for a thread, whether the CLI called it new mail, the box it is in and the
+// posting itself. A blank line is nothing; a line that is not JSON — there are
+// none, but stdout is stdout — counts as a change.
+function watchLine(line) {
   var text = String(line || "").trim()
-  if (text === "") return ""
+  if (text === "") return null
+  var event = { change: "unknown", isNew: false, boxKind: "", boxName: "", posting: null }
   try {
     var value = JSON.parse(text)
-    return value && typeof value.change === "string" ? value.change : "unknown"
+    if (!value || typeof value.change !== "string") return event
+    event.change = value.change
+    event.isNew = value["new"] === true
+    if (value.box && typeof value.box === "object") {
+      event.boxKind = String(value.box.kind || "")
+      event.boxName = cleanText(value.box.name || "")
+    }
+    if (value.posting && typeof value.posting === "object") event.posting = value.posting
+    return event
   } catch (error) {
-    return "unknown"
+    return event
   }
+}
+
+// The toast. What counts as new is the CLI's call, made on every line; what
+// to do about it is the plugin's: the Imbox only, since HEY's attention model
+// puts new mail in one place, one toast per burst, replaced rather than
+// stacked, under the app-name HEY so Omarchy's notification silencing applies
+// (its own `omarchy-action` pops through DND on purpose), with the bar's
+// envelope as the glyph and a click that focuses the TUI. The exec runs on the
+// shell's side, so it survives shell restarts.
+var toastAppName = "HEY"
+var toastGlyph = ""  // nf-fa-envelope, the bar's own
+var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui"
+// Notification ids are daemon-local, not stable identities: after a shell
+// restart the same number may belong to another application's notification,
+// and -r would overwrite that instead of replacing ours. Replacement only
+// matters for back-to-back bursts, so a short window loses nothing.
+var toastReplaceWindowMs = 10 * 60 * 1000
+
+function newImboxMail(event) {
+  return !!event && event.isNew === true && event.boxKind === "imbox" && event.posting !== null
+}
+
+function postingSender(posting) {
+  var creator = posting && posting.creator && typeof posting.creator === "object" ? posting.creator : {}
+  return cleanText(posting.alternative_sender_name || creator.name || creator.email_address || "")
+}
+
+function postingSubject(posting) {
+  return cleanText(posting.name || posting.summary || "")
+}
+
+// composeMailToast turns one burst of new postings into a headline and a
+// description: `Sender — Subject` for a single thread, a count with the first
+// few senders for more.
+function composeMailToast(boxName, postings) {
+  var fresh = Array.isArray(postings) ? postings : []
+  if (fresh.length === 1) {
+    var posting = fresh[0]
+    var description = cleanText(posting.summary || "")
+    if (description === postingSubject(posting)) description = ""  // the summary already stood in for a missing subject
+    return { headline: postingSender(posting) + " — " + postingSubject(posting), description: description }
+  }
+
+  var senders = []
+  for (var i = 0; i < fresh.length; i++) {
+    if (senders.length === 3) {
+      senders.push("…")
+      break
+    }
+    senders.push(postingSender(fresh[i]))
+  }
+  return { headline: fresh.length + " new in " + (cleanText(boxName) || "Imbox"), description: senders.join(", ") }
+}
+
+// notificationText keeps mail-derived text from being read as an option:
+// notify-send parses a leading dash wherever it appears, and a subject or
+// summary can start with one. A word joiner is invisible on screen but makes
+// the argument a plain positional.
+function notificationText(text) {
+  var value = String(text || "")
+  return value.charAt(0) === "-" ? "\u2060" + value : value
+}
+
+// replaceableToastId is the last toast's id while it is recent enough to
+// trust, and 0 otherwise.
+function replaceableToastId(id, atMs, nowMs) {
+  var value = Number(id || 0)
+  if (!isFinite(value) || value <= 0) return 0
+  return Number(nowMs) - Number(atMs || 0) > toastReplaceWindowMs ? 0 : value
+}
+
+// toastCommand is the argv: omarchy-notification-send takes its own options
+// first, then the headline and the description, then anything for
+// notify-send — -p to print the daemon's id, -r to replace the last one.
+function toastCommand(headline, description, replaceId) {
+  var command = [
+    "omarchy-notification-send",
+    "--glyph", toastGlyph,
+    "--app-name", toastAppName,
+    "-u", "low",
+    "--exec", toastFocusCommand,
+    notificationText(headline)
+  ]
+  if (String(description || "") !== "") command.push(notificationText(description))
+  command.push("-p")
+  var id = Number(replaceId || 0)
+  if (isFinite(id) && id > 0) command.push("-r", String(id))
+  return command
 }
 
 // `hey screener list --count --json` answers a bare number since the global
@@ -380,7 +479,16 @@ if (typeof module !== "undefined") {
     cliTooOldMessage: cliTooOldMessage,
     boxCommand: boxCommand,
     watchCommand: watchCommand,
-    watchLineChange: watchLineChange,
+    watchLine: watchLine,
+    newImboxMail: newImboxMail,
+    composeMailToast: composeMailToast,
+    notificationText: notificationText,
+    replaceableToastId: replaceableToastId,
+    toastCommand: toastCommand,
+    toastAppName: toastAppName,
+    toastGlyph: toastGlyph,
+    toastFocusCommand: toastFocusCommand,
+    toastReplaceWindowMs: toastReplaceWindowMs,
     parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,

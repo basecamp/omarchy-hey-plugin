@@ -40,10 +40,8 @@ test("boxCommand reads the Imbox for the panel's threads", () => {
   assert.deepEqual(Model.boxCommand("garbage", false), ["hey", "box", "imbox", "--limit", "50", "--json"])
 })
 
-test("watchCommand follows every box, tied to the shell, toasting only when asked", () => {
-  assert.deepEqual(Model.watchCommand(false), ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
-  assert.deepEqual(Model.watchCommand(true), ["setpriv", "--pdeathsig", "TERM", "hey", "watch", "--notify"])
-  assert.deepEqual(Model.watchCommand("true"), ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+test("watchCommand follows every box, tied to the shell", () => {
+  assert.deepEqual(Model.watchCommand(), ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
 })
 
 test("parseFailure reads the CLI's error envelope from stderr", () => {
@@ -56,9 +54,9 @@ test("parseFailure reads the CLI's error envelope from stderr", () => {
   assert.equal(Model.parseFailure("", "").code, "")
 })
 
-test("cliTooOld recognizes a CLI without hey watch --notify", () => {
+test("cliTooOld recognizes a CLI without hey watch or hey box --account", () => {
   assert.equal(Model.cliTooOld("", 'Error: unknown command "watch" for "hey"'), true)
-  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --notify","code":"usage"}'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
   assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })
@@ -68,11 +66,90 @@ test("parseScreenerCount reads a bare number as well as the older envelope", () 
   assert.deepEqual(Model.parseScreenerCount("12"), { ok: true, count: 12 })
 })
 
-test("watchLineChange reads the change of a hey watch line", () => {
-  assert.equal(Model.watchLineChange('{"change":"added","posting_id":9001}'), "added")
-  assert.equal(Model.watchLineChange('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}'), "ready")
-  assert.equal(Model.watchLineChange("   "), "")
-  assert.equal(Model.watchLineChange("not json"), "unknown")
+test("watchLine reads a hey watch line: the change, the box, and whether it is new mail", () => {
+  const added = Model.watchLine('{"change":"added","posting_id":9001,"box":{"id":24088,"kind":"imbox","name":"Imbox"},"new":true,"posting":{"id":9001,"name":"Lunch on Thursday?"}}')
+  assert.equal(added.change, "added")
+  assert.equal(added.isNew, true)
+  assert.equal(added.boxKind, "imbox")
+  assert.equal(added.boxName, "Imbox")
+  assert.equal(added.posting.name, "Lunch on Thursday?")
+  assert.equal(Model.newImboxMail(added), true)
+
+  const notNew = Model.watchLine('{"change":"updated","posting_id":9001,"box":{"kind":"imbox","name":"Imbox"},"new":false,"posting":{"id":9001}}')
+  assert.equal(notNew.isNew, false)
+  assert.equal(Model.newImboxMail(notNew), false)
+
+  const feed = Model.watchLine('{"change":"added","posting_id":9002,"box":{"kind":"feedbox","name":"The Feed"},"new":true,"posting":{"id":9002}}')
+  assert.equal(Model.newImboxMail(feed), false, "new mail in The Feed is not the Imbox's")
+
+  const ready = Model.watchLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+  assert.equal(ready.change, "ready")
+  assert.equal(ready.isNew, false)
+  assert.equal(ready.posting, null)
+  assert.equal(Model.watchLine("   "), null)
+  assert.equal(Model.watchLine("not json").change, "unknown")
+  assert.equal(Model.newImboxMail(null), false)
+})
+
+test("composeMailToast headlines one thread as Sender — Subject", () => {
+  const toast = Model.composeMailToast("Imbox", [
+    { id: 9001, name: "Lunch on Thursday?", summary: "Are you free around noon?", creator: { name: "Maria Delgado" } }
+  ])
+  assert.equal(toast.headline, "Maria Delgado — Lunch on Thursday?")
+  assert.equal(toast.description, "Are you free around noon?")
+})
+
+test("composeMailToast drops a description that already stood in for the subject", () => {
+  const toast = Model.composeMailToast("Imbox", [
+    { id: 9001, summary: "Your August invoice is attached.", creator: { email_address: "billing@example.com" } }
+  ])
+  assert.equal(toast.headline, "billing@example.com — Your August invoice is attached.")
+  assert.equal(toast.description, "")
+})
+
+test("composeMailToast counts a burst and lists the first senders", () => {
+  const toast = Model.composeMailToast("Imbox", [
+    { id: 9001, name: "Lunch on Thursday?", creator: { name: "Maria Delgado" }, alternative_sender_name: "Maria (personal)" },
+    { id: 9002, name: "Invoice #4021", creator: { name: "Northwind Invoicing" } },
+    { id: 9003, name: "Draft agenda for Monday", creator: { name: "Sam Whitfield" } },
+    { id: 9004, name: "Photos from the offsite", creator: { name: "Priya Raman" } }
+  ])
+  assert.equal(toast.headline, "4 new in Imbox")
+  assert.equal(toast.description, "Maria (personal), Northwind Invoicing, Sam Whitfield, …")
+})
+
+test("toastCommand goes out as HEY with the glyph, the focus exec and -p, replacing a recent toast", () => {
+  const first = Model.toastCommand("Maria Delgado — Lunch on Thursday?", "Are you free around noon?", 0)
+  assert.deepEqual(first, [
+    "omarchy-notification-send",
+    "--glyph", Model.toastGlyph,
+    "--app-name", "HEY",
+    "-u", "low",
+    "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
+    "Maria Delgado — Lunch on Thursday?",
+    "Are you free around noon?",
+    "-p"
+  ])
+  const second = Model.toastCommand("2 new in Imbox", "", 42)
+  assert.deepEqual(second.slice(-4), ["2 new in Imbox", "-p", "-r", "42"])
+})
+
+test("notificationText keeps mail text from being read as an option", () => {
+  const command = Model.toastCommand("-r Systems Ltd — --help with the quarterly numbers", "-p please see attached", 0)
+  for (const arg of command) {
+    if (arg.startsWith("-")) assert.ok(["--glyph", "--app-name", "-u", "--exec", "-p", "-r"].includes(arg), `mail text arrived as an option: ${arg}`)
+  }
+  assert.ok(command.includes("\u2060-r Systems Ltd — --help with the quarterly numbers"))
+  assert.ok(command.includes("\u2060-p please see attached"))
+  assert.equal(Model.notificationText("Lunch on Thursday?"), "Lunch on Thursday?")
+})
+
+test("replaceableToastId trusts the last id for ten minutes only", () => {
+  const sentAt = 1_000_000
+  assert.equal(Model.replaceableToastId(42, sentAt, sentAt + 60_000), 42)
+  assert.equal(Model.replaceableToastId(42, sentAt, sentAt + Model.toastReplaceWindowMs + 1), 0, "a toast id from before a shell restart may belong to another application")
+  assert.equal(Model.replaceableToastId(0, sentAt, sentAt), 0)
+  assert.equal(Model.replaceableToastId("garbage", sentAt, sentAt), 0)
 })
 
 test("parseScreenerCount reads hey screener list --count", () => {

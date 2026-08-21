@@ -40,9 +40,10 @@ Item {
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 600, 60, 3600)
   readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
-  // New-mail toasts, sent by `hey watch --notify` itself: one per batch of
-  // changes at most, replacing the previous one, identified as HEY so Omarchy's
-  // notification silencing applies. Off unless the bar entry says true.
+  // New-mail toasts: the watch says on every line whether the thread is new
+  // mail, and the plugin toasts the Imbox's — one per burst at most, replacing
+  // the previous one, identified as HEY so Omarchy's notification silencing
+  // applies. Off unless the bar entry says true.
   readonly property bool notify: setting("notify", false) === true
   readonly property int accountCount: accounts.length
   // Every process a refresh drives; a pending refresh waits for all of them.
@@ -64,8 +65,16 @@ Item {
   property string watchError: ""
   property int watchRestartMs: 0
   property double watchStartedAtMs: 0
-  property bool restartWatch: false
   property string _watchLastStderr: ""
+
+  // The toast: new Imbox lines collect for toastDebounceMs — one read's burst
+  // is one toast — and the daemon's printed id is kept so the next burst
+  // replaces the toast on screen instead of stacking.
+  property int toastDebounceMs: 1500
+  property var _toastQueue: []
+  property int _toastId: 0
+  property double _toastAtMs: 0
+  property string _toastOutput: ""
 
   property string _probeOutput: ""
   property string _accountsOutput: ""
@@ -183,13 +192,15 @@ Item {
     _watchLastStderr = ""
     watchError = ""
     watchStartedAtMs = Date.now()
-    watchProcess.command = Model.watchCommand(notify)
+    watchProcess.command = Model.watchCommand()
     watchProcess.running = true
   }
 
   function stopWatch() {
     watchRestartTimer.stop()
     watchDebounce.stop()
+    toastDebounce.stop()
+    _toastQueue = []
     connected = false
     if (watchProcess.running) watchProcess.running = false
   }
@@ -199,28 +210,64 @@ Item {
   // "disconnected" only turns the live state off: there is nothing new to read
   // until the watch catches up and says "ready" again. Wake-ups are debounced,
   // so a burst of changes costs one read, plus one follow-up when changes land
-  // while a read is in flight, since that read may predate them.
+  // while a read is in flight, since that read may predate them. A line the
+  // CLI calls new mail in the Imbox is also a toast, when toasts are on.
   function watchEvent(line) {
-    var change = Model.watchLineChange(line)
-    if (change === "") return
+    var event = Model.watchLine(line)
+    if (event === null) return
     watchError = ""
-    if (change === "disconnected") {
+    if (event.change === "disconnected") {
       connected = false
       return
     }
-    if (change === "ready") connected = true
+    if (event.change === "ready") connected = true
+    if (notify && Model.newImboxMail(event)) collectToast(event)
     watchDebounce.interval = watchDebounceMs
     watchDebounce.restart()
+  }
+
+  function collectToast(event) {
+    var queue = _toastQueue.slice()
+    queue.push({ boxName: event.boxName, posting: event.posting })
+    _toastQueue = queue
+    toastDebounce.interval = toastDebounceMs
+    toastDebounce.restart()
+  }
+
+  // One toast for whatever collected: Sender — Subject for one thread, a count
+  // with the first senders for more, replacing the last toast while its id is
+  // recent enough to trust. A send still in flight keeps the queue for the
+  // next turn of the debounce rather than dropping it.
+  function sendToast() {
+    if (_toastQueue.length === 0) return
+    if (toastProcess.running) {
+      toastDebounce.restart()
+      return
+    }
+    var postings = []
+    for (var i = 0; i < _toastQueue.length; i++) postings.push(_toastQueue[i].posting)
+    var toast = Model.composeMailToast(_toastQueue[0].boxName, postings)
+    _toastQueue = []
+    _toastOutput = ""
+    toastProcess.command = Model.toastCommand(toast.headline, toast.description,
+      Model.replaceableToastId(_toastId, _toastAtMs, Date.now()))
+    toastProcess.running = true
+  }
+
+  // -p printed the daemon's id for the toast, which is what -r replaces next
+  // time. A send that failed is not the panel's error: the next burst toasts
+  // again.
+  function toastSent(exitCode, stdout) {
+    var id = parseInt(String(stdout || "").trim(), 10)
+    if (exitCode === 0 && isFinite(id) && id > 0) {
+      _toastId = id
+      _toastAtMs = Date.now()
+    }
   }
 
   function watchExited(exitCode) {
     connected = false
     watchDebounce.stop()
-    if (restartWatch) {
-      restartWatch = false
-      startWatch()
-      return
-    }
     var stderr = _watchLastStderr
     var failure = Model.parseFailure("", stderr)
     if (Model.isAuthError(failure.code)) {
@@ -299,15 +346,12 @@ Item {
     readProcess.running = true
   }
 
-  // Flipping the toasts restarts the watch with or without --notify; the exit
-  // handler starts the new one at once. No shell restart, no waiting.
+  // Flipping the toasts only gates what the watch's lines do; the watch itself
+  // runs on. Off drops whatever was about to toast.
   onNotifyChanged: {
-    if (watchProcess.running) {
-      restartWatch = true
-      watchProcess.running = false
-    } else {
-      startWatch()
-    }
+    if (notify) return
+    toastDebounce.stop()
+    _toastQueue = []
   }
 
   onActiveChanged: if (!active) stopWatch()
@@ -341,6 +385,26 @@ Item {
     id: watchDebounce
     repeat: false
     onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: toastDebounce
+    repeat: false
+    onTriggered: root.sendToast()
+  }
+
+  Process {
+    id: toastProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: toastStdout
+      waitForEnd: true
+      onStreamFinished: root._toastOutput = text
+    }
+    onExited: function(exitCode) {
+      root.toastSent(exitCode, String(toastStdout.text || root._toastOutput || ""))
+    }
   }
 
   Timer {

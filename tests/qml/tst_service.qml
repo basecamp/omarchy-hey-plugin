@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import Quickshell.Io
 import "../.."
+import "../../Model.js" as Model
 
 TestCase {
   name: "ServiceSetup"
@@ -85,6 +86,14 @@ TestCase {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
       if (process.command.length > 0 && process.command[0] === "setpriv") return process
+    }
+    return null
+  }
+
+  function findToastProcess() {
+    for (var i = 0; i < ProcessRegistry.processes.length; i++) {
+      var process = ProcessRegistry.processes[i]
+      if (process.command.length > 0 && process.command[0] === "omarchy-notification-send") return process
     }
     return null
   }
@@ -212,30 +221,125 @@ TestCase {
     compare(service.refreshing, true)
   }
 
-  function test_watch_passes_notify_when_the_setting_is_on() {
+  // The lines hey watch writes for new mail: the Imbox's, and The Feed's.
+  readonly property string newLunchLine: '{"change":"added","at":"2026-08-21T09:00:20.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9001,"thread_id":5511,"new":true,"posting":{"id":9001,"name":"Lunch on Thursday?","summary":"Are you free around noon?","creator":{"name":"Maria Delgado"}}}'
+  readonly property string newInvoiceLine: '{"change":"added","at":"2026-08-21T09:00:25.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9002,"thread_id":5512,"new":true,"posting":{"id":9002,"name":"Invoice #4021","creator":{"name":"Northwind Invoicing"}}}'
+  readonly property string newDealsLine: '{"change":"added","at":"2026-08-21T09:00:30.000Z","box":{"id":24089,"kind":"feedbox","name":"The Feed"},"posting_id":9003,"thread_id":5513,"new":true,"posting":{"id":9003,"name":"48 hours only","creator":{"name":"Weekend Deals"}}}'
+  readonly property string readLunchLine: '{"change":"updated","at":"2026-08-21T09:01:00.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9001,"thread_id":5511,"new":false,"posting":{"id":9001,"name":"Lunch on Thursday?","seen":true,"creator":{"name":"Maria Delgado"}}}'
+
+  // Settles with toasts on and the toast debounce, like the read's, at zero.
+  function settleNotifying() {
     service.settings = { notify: true }
+    service.toastDebounceMs = 0
     settle()
-    compare(findWatchProcess().command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch", "--notify"])
   }
 
-  function test_watch_ignores_a_non_boolean_notify_setting() {
+  function test_a_new_imbox_line_is_a_toast_from_the_plugin() {
+    settleNotifying()
+    var watch = findWatchProcess()
+    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+
+    watch.emitLine(newLunchLine)
+    tick()
+    var toast = findToastProcess()
+    verify(toast !== null)
+    verify(toast.running)
+    compare(toast.command, [
+      "omarchy-notification-send",
+      "--glyph", Model.toastGlyph,
+      "--app-name", "HEY",
+      "-u", "low",
+      "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
+      "Maria Delgado — Lunch on Thursday?",
+      "Are you free around noon?",
+      "-p"
+    ])
+    // The line is a wake-up too, as every line is.
+    compare(service.refreshing, true)
+  }
+
+  function test_two_new_lines_in_the_window_are_one_toast() {
+    settleNotifying()
+    var watch = findWatchProcess()
+
+    watch.emitLine(newLunchLine)
+    watch.emitLine(newInvoiceLine)
+    tick()
+    var toast = findToastProcess()
+    verify(toast !== null)
+    compare(toast.command.slice(-3), ["2 new in Imbox", "Maria Delgado, Northwind Invoicing", "-p"])
+    toast.complete(0, "42\n", "")
+    compare(service._toastId, 42)
+  }
+
+  function test_the_next_burst_replaces_the_toast() {
+    settleNotifying()
+    var watch = findWatchProcess()
+
+    watch.emitLine(newLunchLine)
+    tick()
+    var toast = findToastProcess()
+    compare(toast.command.indexOf("-r"), -1)
+    toast.complete(0, "42\n", "")
+
+    watch.emitLine(newInvoiceLine)
+    tick()
+    compare(toast.command.slice(-4), ["Northwind Invoicing — Invoice #4021", "-p", "-r", "42"])
+
+    // A send that printed no id leaves the last one in place.
+    toast.complete(1, "", "notify-send: no notification daemon")
+    compare(service._toastId, 42)
+  }
+
+  function test_new_mail_in_the_feed_does_not_toast() {
+    settleNotifying()
+    findWatchProcess().emitLine(newDealsLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+    // It still wakes the read, like any change.
+    compare(service.refreshing, true)
+  }
+
+  function test_a_line_that_is_not_new_does_not_toast() {
+    settleNotifying()
+    findWatchProcess().emitLine(readLunchLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+  }
+
+  function test_notify_off_does_not_toast() {
+    service.toastDebounceMs = 0
+    settle()
+    findWatchProcess().emitLine(newLunchLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+  }
+
+  function test_a_non_boolean_notify_setting_is_off() {
     service.settings = { notify: "true" }
+    service.toastDebounceMs = 0
     settle()
-    compare(findWatchProcess().command.indexOf("--notify"), -1)
+    compare(service.notify, false)
+    findWatchProcess().emitLine(newLunchLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
   }
 
-  function test_flipping_notify_restarts_the_watch() {
+  function test_flipping_notify_leaves_the_watch_alone() {
     settle()
     var before = findWatchProcess()
-    compare(before.command.indexOf("--notify"), -1)
 
     service.settings = { notify: true }
     verify(before.running)
-    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch", "--notify"])
+    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
     compare(service.watchRestartScheduled, false)
 
+    // Off drops a toast that was about to go out.
+    service.toastDebounceMs = 1000
+    before.emitLine(newLunchLine)
+    compare(service._toastQueue.length, 1)
     service.settings = { notify: false }
-    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+    compare(service._toastQueue.length, 0)
     verify(before.running)
   }
 
@@ -319,12 +423,11 @@ TestCase {
     compare(service.watchRestartMs, 4000)
   }
 
-  function test_watch_without_the_notify_flag_reports_an_old_cli() {
-    service.settings = { notify: true }
+  function test_watch_missing_from_the_cli_reports_an_old_cli() {
     settle()
     var watch = findWatchProcess()
 
-    watch.complete(1, "", '{"ok":false,"error":"unknown flag: --notify","code":"usage"}')
+    watch.complete(1, "", 'Error: unknown command "watch" for "hey"')
     compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
     compare(service.watchRestartScheduled, false)
   }
