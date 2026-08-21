@@ -52,6 +52,7 @@ test("parseFailure reads the CLI's error envelope from stderr", () => {
 
 test("cliTooOld recognizes a CLI without hey omarchy poll", () => {
   assert.equal(Model.cliTooOld("", 'Error: unknown command "omarchy" for "hey"'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --limit","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
   assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })

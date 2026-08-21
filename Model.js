@@ -81,9 +81,12 @@ function isAuthError(code) {
 var minimumCliVersion = "0.2.0"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
 
-// An older CLI has no `omarchy poll`; cobra reports it as an unknown command.
+// An older CLI has no `omarchy poll`: a release before the `omarchy` group
+// reports an unknown command, a build with the group but without `poll`
+// trips over the first flag instead. The plugin only ever passes fixed
+// flags, so either one means the CLI is too old.
 function cliTooOld(stdout, stderr) {
-  return /unknown command/i.test(String(stderr || "") + String(stdout || ""))
+  return /unknown (command|flag)/i.test(String(stderr || "") + String(stdout || ""))
 }
 
 // hey omarchy poll takes the panel's thread limit and, when the bar entry
