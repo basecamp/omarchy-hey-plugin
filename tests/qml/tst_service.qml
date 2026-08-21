@@ -16,7 +16,19 @@ TestCase {
   function init() {
     service = serviceComponent.createObject(this)
     verify(service !== null)
+    service.watchDebounceMs = 0
+    // The refresh timer's start trigger fires on the first turn of the event
+    // loop: let it, so every test begins as the shell does, mid-probe.
+    tick()
+    verify(findProbeProcess().running)
   }
+
+  // Lets zero-length timers — the debounce, the follow-up refresh — fire.
+  function tick() { wait(1) }
+
+  // The refresh timer fires once at creation, so a probe is usually already in
+  // flight; asking again would only queue a follow-up.
+  function beginRefresh() { if (!service.busy) service.refresh() }
 
   function cleanup() {
     service.destroy()
@@ -42,7 +54,7 @@ TestCase {
   // Walks a refresh past the probe and the accounts list so the Imbox read
   // is the next process to run.
   function refreshToBox(accountsOK) {
-    service.refresh()
+    beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
     var accounts = findHeyProcess("accounts")
     verify(accounts !== null)
@@ -59,6 +71,14 @@ TestCase {
     refreshToBox(true).complete(0, '{"ok":true,"data":{"postings":[]}}', "")
     findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
     compare(service.busy, false)
+  }
+
+  // Completes a refresh that is in flight, probe first.
+  function finishRefresh() {
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    findHeyProcess("accounts").complete(0, '{"ok":true,"data":[]}', "")
+    findHeyProcess("box").complete(0, '{"ok":true,"data":{"postings":[]}}', "")
+    findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
   }
 
   function findWatchProcess() {
@@ -138,25 +158,58 @@ TestCase {
     compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
   }
 
-  function test_watch_starts_once_signed_in_and_before_the_imbox_is_read() {
+  function test_watch_starts_once_signed_in() {
     verify(findWatchProcess() === null || !findWatchProcess().running)
-    service.refresh()
+    beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
 
     var watch = findWatchProcess()
     verify(watch !== null)
     verify(watch.running)
     compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
-    compare(service.connected, true)
-    // The Imbox read has not run yet: the watch's cursor is ahead of it.
-    verify(findHeyProcess("box") === null || !findHeyProcess("box").running)
+    compare(service.watching, true)
+    // Alive is not the same as live: the watch has not said ready.
+    compare(service.connected, false)
   }
 
   function test_watch_does_not_start_while_signed_out() {
-    service.refresh()
+    beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
     verify(findWatchProcess() === null || !findWatchProcess().running)
+    compare(service.watching, false)
+  }
+
+  function test_ready_makes_the_watch_live_and_reads_the_imbox() {
+    settle()
+    var watch = findWatchProcess()
+
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+    compare(service.connected, true)
+    tick()
+    // The read on ready is the one that closes the startup gap.
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+  }
+
+  function test_disconnected_turns_live_off_without_a_read() {
+    settle()
+    var watch = findWatchProcess()
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+    tick()
+    finishRefresh()
+    compare(service.connected, true)
+
+    watch.emitLine('{"change":"disconnected","at":"2026-08-21T09:05:00.000Z"}')
+    tick()
     compare(service.connected, false)
+    compare(service.watching, true)
+    compare(service.refreshing, false)
+
+    // The catch-up after the reconnect says ready again: live, and a read.
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:06:00.000Z"}')
+    tick()
+    compare(service.connected, true)
+    compare(service.refreshing, true)
   }
 
   function test_watch_passes_notify_when_the_setting_is_on() {
@@ -186,30 +239,46 @@ TestCase {
     verify(before.running)
   }
 
-  function test_watch_event_is_a_coalesced_refresh() {
+  function test_a_burst_of_watch_events_is_one_debounced_read() {
     settle()
     var watch = findWatchProcess()
 
     watch.emitLine('{"change":"added","at":"2026-08-21T09:00:20.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9001}')
-    compare(service.refreshing, true)
-    verify(findProbeProcess().running)
-
-    // A burst while the refresh runs folds into one follow-up.
     watch.emitLine('{"change":"updated","posting_id":9001}')
     watch.emitLine('{"change":"deleted","posting_id":9002}')
+    compare(service.refreshing, false)
+    tick()
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+    compare(service.refreshPending, false)
+  }
+
+  function test_events_during_a_read_cost_one_follow_up() {
+    settle()
+    var watch = findWatchProcess()
+    watch.emitLine('{"change":"added","posting_id":9001}')
+    tick()
+    compare(service.refreshing, true)
+
+    // The read in flight may predate these: one follow-up, not three.
+    watch.emitLine('{"change":"updated","posting_id":9001}')
+    watch.emitLine('{"change":"updated","posting_id":9003}')
+    watch.emitLine('{"change":"deleted","posting_id":9002}')
+    tick()
     compare(service.refreshPending, true)
 
-    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
-    findHeyProcess("accounts").complete(0, '{"ok":true,"data":[]}', "")
-    findHeyProcess("box").complete(0, '{"ok":true,"data":{"postings":[]}}', "")
-    findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
+    finishRefresh()
+    compare(service.refreshing, false)
+    tick()
     compare(service.refreshPending, false)
     compare(service.refreshing, true)
+    verify(findProbeProcess().running)
   }
 
   function test_watch_blank_line_is_not_an_event() {
     settle()
     findWatchProcess().emitLine("")
+    tick()
     compare(service.refreshing, false)
   }
 
@@ -217,14 +286,16 @@ TestCase {
     settle()
     var watch = findWatchProcess()
 
+    watch.emitLine('{"change":"ready"}')
     watch.complete(3, "", '{"ok":false,"error":"HEY\'s cable server turned this subscription down — run `hey auth login` again","code":"auth"}')
     compare(service.authenticated, false)
     compare(service.connected, false)
+    compare(service.watching, false)
     compare(service.watchRestartScheduled, false)
     compare(service.lastError, "")
 
     // Signed in again: the next probe restarts it.
-    service.refresh()
+    beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
     verify(watch.running)
   }
@@ -234,7 +305,7 @@ TestCase {
     var watch = findWatchProcess()
 
     watch.complete(6, "", '{"ok":false,"error":"HEY\'s cable server hung up for good — nothing is watching for changes any more","code":"network"}')
-    compare(service.connected, false)
+    compare(service.watching, false)
     compare(service.watchRestartScheduled, true)
     compare(service.watchRestartMs, 2000)
     verify(service.watchError.indexOf("hung up") !== -1)
@@ -278,7 +349,7 @@ TestCase {
   }
 
   function test_accounts_auth_error_on_stderr_asks_to_sign_in() {
-    service.refresh()
+    beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
     findHeyProcess("accounts").complete(3, "", '{"ok":false,"error":"not logged in","code":"auth"}')
     compare(service.authenticated, false)
@@ -299,7 +370,7 @@ TestCase {
   }
 
   function test_screener_count_comes_from_the_cli() {
-    service.refresh()
+    beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
     var screener = findHeyProcess("screener")
     verify(screener !== null)
@@ -319,9 +390,19 @@ TestCase {
     compare(service.refreshPending, true)
     compare(service.refreshing, false)
     findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
-    // Everything settled: the pending refresh started a new probe, once.
+    // Everything settled: the pending refresh starts a new probe, once, on
+    // the next turn of the event loop.
     compare(service.refreshPending, false)
+    tick()
     compare(service.refreshing, true)
     verify(findProbeProcess().running)
+  }
+
+  function test_screener_count_may_be_a_bare_number() {
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    findHeyProcess("screener").complete(0, "3\n", "")
+    compare(service.screenerCount, 3)
+    compare(service.lastError, "")
   }
 }

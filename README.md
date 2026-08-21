@@ -67,15 +67,15 @@ The plugin manifest declares the right bar section as its default placement.
 
 ## Live updates
 
-The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey watch` follows every HEY box over HEY's cable and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, folding a burst of changes into one read. The watch starts before the first read, so nothing falls between the two, and after a disconnect — a suspended laptop, a dropped network — it catches up from its own cursor, so the panel is current within seconds of coming back. The 10-minute re-read stays only as a safety net.
+The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey watch` follows every HEY box over HEY's cable and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. The 10-minute re-read stays only as a safety net.
 
-The bar logo's tooltip says `live` while the watch is connected. When the watch stops for a reason other than being signed out, the panel header says so and the plugin restarts it on a backoff (two seconds, doubling to a minute); signed out, it waits for you to sign in again.
+The bar logo's tooltip says `live` while the watch has said `ready` and not `disconnected` since. When the watch stops for a reason other than being signed out, the panel header says so and the plugin restarts it on a backoff (two seconds, doubling to a minute); signed out, it waits for you to sign in again.
 
 ## Notifications
 
 Off by default. The switch in the panel header turns new-mail toasts on; so do `hey setup omarchy --notify` and `omarchy bar set 37signals.hey notify true --json` — all three flip the `notify` key on the plugin's entry in `~/.config/omarchy/shell.json`, which the shell hot-reloads. Flipping it restarts the watch with or without `--notify`; no shell restart.
 
-When on, the plugin runs `hey watch --notify` and the CLI sends the toast itself through `notify-send`:
+When on, the plugin runs `hey watch --notify` and the CLI sends the toast itself through `notify-send`, for the Imbox only — the watch follows every box, but only Imbox mail asks for attention:
 
 - At most one toast per batch of changes — `Sender — Subject` for one new thread, `N new in Imbox` with the first few senders for more — replacing the previous toast rather than stacking.
 - New means an unseen, unmuted thread that arrived, or one with a reply newer than the watch last saw; reading a thread, marking it unseen again or moving it never toasts. The watch's first read of a box is its backlog and is never toasted.

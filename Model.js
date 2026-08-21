@@ -98,16 +98,36 @@ function boxCommand(limit, withAccountFilter) {
 }
 
 // hey watch is the wake-up: it follows every box over HEY's cable and prints
-// a line per change. setpriv --pdeathsig ties it to the shell, so a shell that
-// dies takes its watch along instead of leaving one behind per restart. With
-// --notify the watch sends the new-mail toasts itself.
+// a line per change, plus "ready", "disconnected" and "resync" about itself.
+// setpriv --pdeathsig ties it to the shell, so a shell that dies takes its
+// watch along instead of leaving one behind per restart. With --notify the
+// watch sends the new-mail toasts itself — for the Imbox, its default.
 function watchCommand(notify) {
   var command = ["setpriv", "--pdeathsig", "TERM", "hey", "watch"]
   if (notify === true) command.push("--notify")
   return command
 }
 
+// watchLineChange reads the `change` of one line from hey watch: added, updated
+// or deleted for a thread; ready, disconnected or resync about the watch. A line
+// that is not JSON — there are none, but stdout is stdout — counts as a change.
+function watchLineChange(line) {
+  var text = String(line || "").trim()
+  if (text === "") return ""
+  try {
+    var value = JSON.parse(text)
+    return value && typeof value.change === "string" ? value.change : "unknown"
+  } catch (error) {
+    return "unknown"
+  }
+}
+
+// `hey screener list --count --json` answers a bare number since the global
+// --count took over from the command's own flag; older CLIs answer the envelope
+// with `data.pending_count`. Both are a count.
 function parseScreenerCount(raw) {
+  var text = String(raw || "").trim()
+  if (/^\d+$/.test(text)) return { ok: true, count: parseInt(text, 10) }
   var result = parseJson(raw)
   if (!result.ok) return { ok: false, error: result.error, count: 0 }
   var data = result.value.data && typeof result.value.data === "object" ? result.value.data : {}
@@ -360,6 +380,7 @@ if (typeof module !== "undefined") {
     cliTooOldMessage: cliTooOldMessage,
     boxCommand: boxCommand,
     watchCommand: watchCommand,
+    watchLineChange: watchLineChange,
     parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,

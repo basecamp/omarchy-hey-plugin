@@ -49,14 +49,18 @@ Item {
   readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
 
   // The watch: `hey watch` follows every box over HEY's cable and prints a line
-  // per change. A line is a wake-up — the Imbox is re-read, coalesced — not a
+  // per change. A line is a wake-up — the Imbox is re-read, debounced — not a
   // delta. It watches every box because a move out of the Imbox is written in
-  // the box the thread went to, never in the Imbox's own feed. It starts once
-  // the probe says the CLI is signed in, and before the Imbox is read, so
-  // nothing can change between the two; after a disconnect it catches up from
-  // its own cursor, so a laptop back from suspend is current within seconds.
-  readonly property bool connected: watchProcess.running
+  // the box the thread went to, never in the Imbox's own feed. The watch says
+  // "ready" once its cursors are set and its subscription is live (again after
+  // each reconnect's catch-up), and the read on that line is what makes the
+  // picture gap-free: anything before the cursor is in the read, anything
+  // after it is an event. It says "disconnected" when the cable drops, which
+  // is what `connected` follows — `watching` only says the process is alive.
+  readonly property bool watching: watchProcess.running
+  property bool connected: false
   readonly property bool watchRestartScheduled: watchRestartTimer.running
+  property int watchDebounceMs: 300
   property string watchError: ""
   property int watchRestartMs: 0
   property double watchStartedAtMs: 0
@@ -185,18 +189,33 @@ Item {
 
   function stopWatch() {
     watchRestartTimer.stop()
+    watchDebounce.stop()
+    connected = false
     if (watchProcess.running) watchProcess.running = false
   }
 
-  // Any line from the watch is a wake-up. A burst of changes lands while a
-  // refresh is running, and refresh() folds it into one follow-up.
+  // A line from the watch. "ready" and "resync" are wake-ups like any change —
+  // the read on "ready" is the one that closes the startup gap — while
+  // "disconnected" only turns the live state off: there is nothing new to read
+  // until the watch catches up and says "ready" again. Wake-ups are debounced,
+  // so a burst of changes costs one read, plus one follow-up when changes land
+  // while a read is in flight, since that read may predate them.
   function watchEvent(line) {
-    if (String(line || "").trim() === "") return
+    var change = Model.watchLineChange(line)
+    if (change === "") return
     watchError = ""
-    refresh()
+    if (change === "disconnected") {
+      connected = false
+      return
+    }
+    if (change === "ready") connected = true
+    watchDebounce.interval = watchDebounceMs
+    watchDebounce.restart()
   }
 
   function watchExited(exitCode) {
+    connected = false
+    watchDebounce.stop()
     if (restartWatch) {
       restartWatch = false
       startWatch()
@@ -293,10 +312,13 @@ Item {
 
   onActiveChanged: if (!active) stopWatch()
 
+  // The follow-up refresh starts on the next turn of the event loop rather than
+  // inside busy's own change handler: refresh() flips the processes busy is
+  // made of, and doing that while busy is still being notified is a binding loop.
   onBusyChanged: {
     if (busy || !refreshPending) return
     refreshPending = false
-    refresh()
+    refreshSoon.restart()
   }
 
   // The timer is the safety net under the watch, not the mechanism.
@@ -313,6 +335,19 @@ Item {
     id: watchRestartTimer
     repeat: false
     onTriggered: root.startWatch()
+  }
+
+  Timer {
+    id: watchDebounce
+    repeat: false
+    onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: refreshSoon
+    interval: 0
+    repeat: false
+    onTriggered: root.refresh()
   }
 
   Process {

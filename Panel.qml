@@ -362,6 +362,7 @@ Panel {
         stateFilter: root.stateFilter,
         accountFilter: root.accountFilter,
         refreshing: service.refreshing,
+        watching: service.watching,
         connected: service.connected,
         watchError: service.watchError,
         palette: root.avatarPalette.length,

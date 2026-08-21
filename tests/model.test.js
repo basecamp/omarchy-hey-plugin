@@ -63,6 +63,18 @@ test("cliTooOld recognizes a CLI without hey watch --notify", () => {
   assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })
 
+test("parseScreenerCount reads a bare number as well as the older envelope", () => {
+  assert.deepEqual(Model.parseScreenerCount("0\n"), { ok: true, count: 0 })
+  assert.deepEqual(Model.parseScreenerCount("12"), { ok: true, count: 12 })
+})
+
+test("watchLineChange reads the change of a hey watch line", () => {
+  assert.equal(Model.watchLineChange('{"change":"added","posting_id":9001}'), "added")
+  assert.equal(Model.watchLineChange('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}'), "ready")
+  assert.equal(Model.watchLineChange("   "), "")
+  assert.equal(Model.watchLineChange("not json"), "unknown")
+})
+
 test("parseScreenerCount reads hey screener list --count", () => {
   assert.deepEqual(Model.parseScreenerCount('{"ok":true,"data":{"pending_count":3}}'), { ok: true, error: "", count: 3 })
   assert.equal(Model.parseScreenerCount('{"ok":true,"data":{}}').ok, false)
