@@ -181,6 +181,96 @@ TestCase {
     compare(service.connected, false)
   }
 
+  function test_probe_rejects_a_cli_older_than_the_minimum() {
+    beginRefresh()
+    findProbeProcess().complete(0, 'hey version 0.1.1\n{"ok":true,"data":{"authenticated":true}}', "")
+    compare(service.cliOutdated, true)
+    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    verify(findWatchProcess() === null || !findWatchProcess().running)
+    // The panel still reads on the timer, degraded.
+    verify(findHeyProcess("accounts").running)
+  }
+
+  function test_probe_accepts_a_cli_at_the_minimum() {
+    beginRefresh()
+    findProbeProcess().complete(0, 'hey version 0.2.0\n{"ok":true,"data":{"authenticated":true}}', "")
+    compare(service.cliOutdated, false)
+    compare(service.lastError, "")
+    verify(findWatchProcess().running)
+  }
+
+  function test_an_intentional_stop_is_not_a_watch_failure() {
+    settle()
+    var watch = findWatchProcess()
+    verify(watch.running)
+
+    // Signed out since the last probe: the watch is stopped on purpose.
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
+    verify(!watch.running)
+    compare(service.authenticated, false)
+    compare(service.watchError, "")
+    compare(service.watchRestartScheduled, false)
+    compare(service.lastError, "")
+  }
+
+  function test_auth_lost_during_a_fetch_stops_the_watch() {
+    settle()
+    var watch = findWatchProcess()
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+    compare(service.connected, true)
+
+    var box = refreshToBox(true)
+    box.complete(3, "", '{"ok":false,"error":"not logged in","code":"auth"}')
+    compare(service.authenticated, false)
+    verify(!watch.running)
+    compare(service.connected, false)
+    compare(service.watchError, "")
+  }
+
+  function test_a_failed_mark_seen_re_reads_even_while_live() {
+    settle()
+    service.connected = true
+    service.notifications = [{ id: "7", unread: true }]
+    service.markRead(service.notifications[0])
+    var seen = findHeyProcess("seen")
+    verify(seen !== null)
+    compare(seen.command, ["hey", "seen", "7", "--json"])
+
+    seen.complete(1, "", '{"ok":false,"error":"could not mark as seen","code":"api"}')
+    // The panel marked it seen optimistically and the cable has nothing to
+    // say about a request that failed: the delayed re-read puts it back.
+    compare(service.refreshAfterReadScheduled, true)
+    compare(service.actionStatus, "could not mark as seen")
+    compare(service.actionStatusScheduled, true)
+  }
+
+  function test_marks_queue_one_after_another() {
+    settle()
+    service.notifications = [{ id: "7", unread: true }, { id: "8", unread: true }]
+    service.markRead(service.notifications[0])
+    service.markRead(service.notifications[1])
+    var seen = findHeyProcess("seen")
+    compare(seen.command, ["hey", "seen", "7", "--json"])
+    seen.complete(0, '{"ok":true,"data":{}}', "")
+    // The second mark runs once the first has answered.
+    compare(seen.command, ["hey", "seen", "8", "--json"])
+    verify(seen.running)
+    compare(service.actionStatus, "Marking email as seen…")
+    seen.complete(0, '{"ok":true,"data":{}}', "")
+    compare(service.actionStatus, "Marked as seen")
+    compare(service.actionStatusScheduled, true)
+  }
+
+  function test_a_mark_seen_while_live_leaves_the_re_read_to_the_cable() {
+    settle()
+    service.connected = true
+    service.notifications = [{ id: "7", unread: true }]
+    service.markRead(service.notifications[0])
+    findHeyProcess("seen").complete(0, '{"ok":true,"data":{}}', "")
+    compare(service.refreshAfterReadScheduled, false)
+  }
+
   function test_watch_does_not_start_while_signed_out() {
     beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")

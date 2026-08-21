@@ -86,6 +86,7 @@ Every `added` and `updated` line `hey watch` writes says whether the thread is n
 The plugin runs these local CLI commands:
 
 ```text
+hey version
 hey auth status --json
 hey accounts list --json
 hey box imbox --account all --limit <count> --json

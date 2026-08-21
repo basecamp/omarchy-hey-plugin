@@ -61,6 +61,31 @@ test("cliTooOld recognizes a CLI without hey watch or hey box --account", () => 
   assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })
 
+test("probeCommand asks for the version ahead of the auth status, through bash", () => {
+  assert.equal(Model.probeCommand[0], "bash")
+  assert.match(Model.probeCommand[2], /command -v hey/)
+  assert.match(Model.probeCommand[2], /hey version/)
+  assert.match(Model.probeCommand[2], /hey auth status --json$/)
+})
+
+test("parseProbe splits the version line from the auth status", () => {
+  const probe = Model.parseProbe('hey version 0.2.0\n{"ok":true,"data":{"authenticated":true}}\n')
+  assert.equal(probe.version, "0.2.0")
+  assert.equal(Model.parseJson(probe.status).value.data.authenticated, true)
+  assert.deepEqual(Model.parseProbe('{"ok":true,"data":{"authenticated":false}}'), { version: "", status: '{"ok":true,"data":{"authenticated":false}}' })
+  assert.equal(Model.parseProbe("hey version dev\n{}").version, "dev")
+})
+
+test("cliVersionTooOld holds a release below the minimum against the CLI, and nothing else", () => {
+  assert.equal(Model.cliVersionTooOld("0.1.1"), true)
+  assert.equal(Model.cliVersionTooOld("v0.1.9"), true)
+  assert.equal(Model.cliVersionTooOld("0.2.0"), false)
+  assert.equal(Model.cliVersionTooOld("0.10.0"), false)
+  assert.equal(Model.cliVersionTooOld("1.0.0"), false)
+  assert.equal(Model.cliVersionTooOld("dev"), false)
+  assert.equal(Model.cliVersionTooOld(""), false)
+})
+
 test("parseScreenerCount reads a bare number as well as the older envelope", () => {
   assert.deepEqual(Model.parseScreenerCount("0\n"), { ok: true, count: 0 })
   assert.deepEqual(Model.parseScreenerCount("12"), { ok: true, count: 12 })

@@ -81,6 +81,42 @@ function isAuthError(code) {
 var minimumCliVersion = "0.2.0"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
 
+// The probe answers three questions in one process — is the CLI there, is it
+// new enough, is it signed in — by printing `hey version`'s line ahead of the
+// auth status. bash always exists, so the process always exits; a bare `hey`
+// would never report an exit when the binary is missing.
+var probeCommand = ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey version 2>/dev/null | head -n 1; hey auth status --json"]
+
+// parseProbe splits the probe's output into the version it read and the auth
+// status behind it. No version line — a build whose `hey version` failed, or a
+// test feeding the status alone — leaves the version unknown, not wrong.
+function parseProbe(text) {
+  var raw = String(text || "")
+  var match = raw.match(/^\s*hey version (\S+)[^\n]*\n?/)
+  if (!match) return { version: "", status: raw }
+  return { version: match[1], status: raw.substring(match[0].length) }
+}
+
+// cliVersionTooOld says whether a version the probe read is older than the
+// minimum. `hey watch` exists before 0.2.0 but says neither ready nor which
+// threads are new, so an old watch would run and never be live; the version
+// is how that is caught up front. A dev build, or a version that does not
+// read as one, is not held against the CLI.
+function cliVersionTooOld(version) {
+  var parts = parseSemver(version)
+  if (!parts) return false
+  var minimum = parseSemver(minimumCliVersion)
+  for (var i = 0; i < 3; i++) {
+    if (parts[i] !== minimum[i]) return parts[i] < minimum[i]
+  }
+  return false
+}
+
+function parseSemver(version) {
+  var match = String(version || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)/)
+  return match ? [parseInt(match[1], 10), parseInt(match[2], 10), parseInt(match[3], 10)] : null
+}
+
 // An older CLI trips over a flag it does not have — `hey box --account` is
 // 0.2.0 — and a release older still has no `hey watch` and reports an unknown
 // command. The plugin only ever passes fixed flags, so either one means the
@@ -477,6 +513,9 @@ if (typeof module !== "undefined") {
     isAuthError: isAuthError,
     cliTooOld: cliTooOld,
     cliTooOldMessage: cliTooOldMessage,
+    probeCommand: probeCommand,
+    parseProbe: parseProbe,
+    cliVersionTooOld: cliVersionTooOld,
     boxCommand: boxCommand,
     watchCommand: watchCommand,
     watchLine: watchLine,

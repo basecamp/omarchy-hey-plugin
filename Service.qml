@@ -21,6 +21,10 @@ Item {
   // not dropped: it runs once the current one settles.
   property bool refreshPending: false
   property bool installed: true
+  // The probe read a version older than the minimum: the panel still reads
+  // the Imbox on the timer, but no watch runs — an old `hey watch` says
+  // neither ready nor which threads are new — and the header says to upgrade.
+  property bool cliOutdated: false
   property bool authenticated: true
   property bool probed: false
   property bool setupRunning: false
@@ -65,7 +69,11 @@ Item {
   property string watchError: ""
   property int watchRestartMs: 0
   property double watchStartedAtMs: 0
+  // A stop the service asked for still reports an exit; it is not a failure.
+  property bool _watchStopping: false
   property string _watchLastStderr: ""
+  readonly property bool refreshAfterReadScheduled: refreshAfterRead.running
+  readonly property bool actionStatusScheduled: actionStatusTimer.running
 
   // The toast: new Imbox lines collect for toastDebounceMs — one read's burst
   // is one toast — and the daemon's printed id is kept so the next burst
@@ -150,10 +158,17 @@ Item {
     }
     installed = true
 
+    var probe = Model.parseProbe(text)
+    cliOutdated = Model.cliVersionTooOld(probe.version)
+    if (cliOutdated) {
+      lastError = Model.cliTooOldMessage
+      stopWatch()
+    }
+
     // Only a well-formed `auth status` success is authoritative for the
     // authenticated flag. Errors and garbage get the error line instead —
     // telling the user to log in can't fix those.
-    var result = Model.parseJson(text)
+    var result = Model.parseJson(probe.status)
     if (!result.ok || !result.value.data) {
       authenticated = true
       probeError = true
@@ -163,8 +178,7 @@ Item {
     }
     authenticated = result.value.data.authenticated === true
     if (!authenticated) {
-      refreshing = false
-      stopWatch()
+      signedOut()
       return
     }
 
@@ -186,8 +200,16 @@ Item {
     notificationProcess.running = true
   }
 
+  // A signed-out CLI, wherever a request found that out: nothing to read,
+  // and nothing to watch with — the watch would only exit the same way.
+  function signedOut() {
+    authenticated = false
+    refreshing = false
+    stopWatch()
+  }
+
   function startWatch() {
-    if (!active || !probed || !installed || !authenticated || watchProcess.running) return
+    if (!active || !probed || !installed || cliOutdated || !authenticated || watchProcess.running) return
     watchRestartTimer.stop()
     _watchLastStderr = ""
     watchError = ""
@@ -202,7 +224,10 @@ Item {
     toastDebounce.stop()
     _toastQueue = []
     connected = false
-    if (watchProcess.running) watchProcess.running = false
+    if (watchProcess.running) {
+      _watchStopping = true
+      watchProcess.running = false
+    }
   }
 
   // A line from the watch. "ready" and "resync" are wake-ups like any change —
@@ -268,6 +293,12 @@ Item {
   function watchExited(exitCode) {
     connected = false
     watchDebounce.stop()
+    if (_watchStopping) {
+      // The service stopped it — signed out, the CLI gone, a local instance
+      // going inert. Not an error, and nothing to restart.
+      _watchStopping = false
+      return
+    }
     var stderr = _watchLastStderr
     var failure = Model.parseFailure("", stderr)
     if (Model.isAuthError(failure.code)) {
@@ -446,9 +477,7 @@ Item {
   Process {
     id: probeProcess
     running: false
-    // bash always exists, so `exited` always fires — a bare `hey`
-    // command would silently never exit when the binary is missing.
-    command: ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey auth status --json"]
+    command: Model.probeCommand
     stdout: StdioCollector {
       id: probeStdout
       waitForEnd: true
@@ -477,8 +506,7 @@ Item {
       var stdout = String(accountsStdout.text || root._accountsOutput || "")
       var stderr = String(accountsStderr.text || root._accountsError || "")
       if (exitCode !== 0 && Model.isAuthError(Model.parseFailure(stdout, stderr).code)) {
-        root.authenticated = false
-        root.refreshing = false
+        root.signedOut()
         return
       }
       var parsed = exitCode === 0 ? Model.parseAccounts(stdout) : { ok: false, accounts: [] }
@@ -509,8 +537,7 @@ Item {
       if (exitCode !== 0) {
         var failure = Model.parseFailure(stdout, stderr)
         if (Model.isAuthError(failure.code)) {
-          root.authenticated = false
-          root.refreshing = false
+          root.signedOut()
           return
         }
         if (Model.cliTooOld(stdout, stderr)) root.lastError = Model.cliTooOldMessage
@@ -587,17 +614,19 @@ Item {
       var stdout = String(readStdout.text || root._readOutput || "")
       var stderr = String(readStderr.text || root._readError || "")
       if (exitCode !== 0) {
-        root.lastError = root.conciseError(stderr || stdout, "Could not mark the email as seen")
+        root.lastError = root.conciseError(Model.parseFailure(stdout, stderr).error || stderr || stdout, "Could not mark the email as seen")
         root.actionStatus = root.lastError
       } else {
         root.actionStatus = "Marked as seen"
       }
-      root.actionStatusTimer.restart()
+      actionStatusTimer.restart()
       root._readingNotification = null
       // The cable reports our own mark-as-seen back within a second; the
-      // delayed re-read is for when nothing is listening.
+      // delayed re-read is for when nothing is listening — and for a request
+      // that failed, which the cable has nothing to report and the panel
+      // has already marked seen.
       if (root._readQueue.length > 0) root.runNextRead()
-      else if (!root.connected) root.refreshAfterRead.restart()
+      else if (!root.connected || exitCode !== 0) refreshAfterRead.restart()
     }
   }
 }
