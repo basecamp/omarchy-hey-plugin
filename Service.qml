@@ -8,6 +8,9 @@ Item {
 
   property var settings: ({})
   property bool refreshing: false
+  // A refresh asked for mid-fetch — the TUI's IPC nudge after it archived a
+  // thread, say — is not dropped: it runs once the current one settles.
+  property bool refreshPending: false
   property bool installed: true
   property bool authenticated: true
   property bool probed: false
@@ -28,10 +31,17 @@ Item {
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 600, 60, 3600)
   readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
+  // New-mail toasts, sent by `hey omarchy poll --notify` itself: one per poll
+  // at most, replacing the previous one, identified as HEY so Omarchy's
+  // notification silencing applies. Off unless the bar entry says true.
+  readonly property bool notify: setting("notify", false) === true
   readonly property int accountCount: accounts.length
+  // Every process a refresh drives; a pending refresh waits for all of them.
+  readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
 
   property string _probeOutput: ""
   property string _accountsOutput: ""
+  property string _accountsError: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
   property string _screenerOutput: ""
@@ -77,7 +87,10 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running) return
+    if (busy) {
+      refreshPending = true
+      return
+    }
     refreshing = true
     lastError = ""
     // Probe on every refresh: a bare `hey` process would never emit
@@ -116,6 +129,7 @@ Item {
     }
 
     _accountsOutput = ""
+    _accountsError = ""
     _screenerOutput = ""
     _screenerError = ""
     accountsProcess.running = true
@@ -125,11 +139,12 @@ Item {
   function fetchNotifications(withAccountFilter) {
     _notificationsOutput = ""
     _notificationsError = ""
-    var command = ["hey", "box", "imbox", "--limit", String(maxNotifications), "--json"]
+    // One Imbox read serves the panel and the toasts. The CLI answers in the
+    // shape of `hey box imbox --json` and, with --notify, diffs the unseen
+    // threads against its own fingerprints and sends the toast itself.
     // Always fetch every linked account so a persisted `hey accounts use`
     // filter cannot hide mail from the panel.
-    if (withAccountFilter) command.splice(3, 0, "--account", "all")
-    notificationProcess.command = command
+    notificationProcess.command = Model.pollCommand(maxNotifications, withAccountFilter, notify)
     notificationProcess.running = true
   }
 
@@ -189,6 +204,16 @@ Item {
     readProcess.running = true
   }
 
+  // Turning toasts on or off takes effect on the next poll; make that now
+  // rather than up to ten minutes away.
+  onNotifyChanged: refresh()
+
+  onBusyChanged: {
+    if (busy || !refreshPending) return
+    refreshPending = false
+    refresh()
+  }
+
   Timer {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
@@ -237,9 +262,15 @@ Item {
       waitForEnd: true
       onStreamFinished: root._accountsOutput = text
     }
+    stderr: StdioCollector {
+      id: accountsStderr
+      waitForEnd: true
+      onStreamFinished: root._accountsError = text
+    }
     onExited: function(exitCode) {
       var stdout = String(accountsStdout.text || root._accountsOutput || "")
-      if (exitCode !== 0 && Model.parseJson(stdout).code === "auth_required") {
+      var stderr = String(accountsStderr.text || root._accountsError || "")
+      if (exitCode !== 0 && Model.isAuthError(Model.parseFailure(stdout, stderr).code)) {
         root.authenticated = false
         root.refreshing = false
         return
@@ -270,12 +301,14 @@ Item {
       var stdout = String(notificationsStdout.text || root._notificationsOutput || "")
       var stderr = String(notificationsStderr.text || root._notificationsError || "")
       if (exitCode !== 0) {
-        if (Model.parseJson(stdout).code === "auth_required") {
+        var failure = Model.parseFailure(stdout, stderr)
+        if (Model.isAuthError(failure.code)) {
           root.authenticated = false
           root.refreshing = false
           return
         }
-        root.lastError = root.conciseError(stderr || stdout, "Could not list HEY emails")
+        if (Model.cliTooOld(stdout, stderr)) root.lastError = Model.cliTooOldMessage
+        else root.lastError = root.conciseError(failure.error || stderr || stdout, "Could not list HEY emails")
         root.refreshing = false
         return
       }
@@ -293,10 +326,8 @@ Item {
   Process {
     id: screenerProcess
     running: false
-    command: [
-      "bash", "-lc",
-      "token=$(hey auth token --quiet) && curl -fsS -H \"Authorization: Bearer $token\" -H \"Accept: application/json\" https://app.hey.com/clearances.json"
-    ]
+    // The CLI's cheap count request; no token ever leaves its credential store.
+    command: ["hey", "screener", "list", "--count", "--json"]
     stdout: StdioCollector {
       id: screenerStdout
       waitForEnd: true
@@ -311,17 +342,13 @@ Item {
       var stdout = String(screenerStdout.text || root._screenerOutput || "")
       var stderr = String(screenerStderr.text || root._screenerError || "")
       if (exitCode !== 0) {
-        root.lastError = root.conciseError(stderr || stdout, "Could not load the HEY Screener count")
+        root.lastError = root.conciseError(Model.parseFailure(stdout, stderr).error || stderr || stdout, "Could not load the HEY Screener count")
         return
       }
 
-      try {
-        var parsed = JSON.parse(stdout)
-        var count = parseInt(String(parsed.pending_clearances_count || 0), 10)
-        root.screenerCount = isFinite(count) ? Math.max(0, count) : 0
-      } catch (error) {
-        root.lastError = "Could not parse the HEY Screener count"
-      }
+      var parsed = Model.parseScreenerCount(stdout)
+      if (parsed.ok) root.screenerCount = parsed.count
+      else root.lastError = parsed.error
     }
   }
 

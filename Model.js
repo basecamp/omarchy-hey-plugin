@@ -33,9 +33,9 @@ function setupPlan(installed, authenticated, ipcTarget) {
   }
   if (installed !== true) {
     plan.title = "HEY CLI is required"
-    plan.command = "omarchy pkg add hey-cli"
+    plan.command = "omarchy pkg aur add hey-cli"
     plan.buttonLabel = "Install HEY CLI…"
-    plan.fix = "omarchy-pkg-add hey-cli && hey auth login"
+    plan.fix = "omarchy-pkg-aur-add hey-cli && hey auth login"
   }
   plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
   return plan
@@ -60,6 +60,49 @@ function parseJson(raw) {
   } catch (error) {
     return { ok: false, error: "Could not parse the HEY CLI response", code: "" }
   }
+}
+
+// The CLI writes its error envelope to stderr and nothing to stdout, so a
+// failed command is read from whichever stream carried it. `auth` is the
+// CLI's code for a signed-out state; `auth_required` is kept for older
+// builds.
+function parseFailure(stdout, stderr) {
+  var text = String(stderr || "").trim() !== "" ? stderr : stdout
+  var result = parseJson(text)
+  if (result.ok) return { ok: false, error: "The HEY CLI request failed", code: "", hint: "" }
+  return result
+}
+
+function isAuthError(code) {
+  var value = String(code || "")
+  return value === "auth" || value === "auth_required"
+}
+
+var minimumCliVersion = "0.2.0"
+var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
+
+// An older CLI has no `omarchy poll`; cobra reports it as an unknown command.
+function cliTooOld(stdout, stderr) {
+  return /unknown command/i.test(String(stderr || "") + String(stdout || ""))
+}
+
+// hey omarchy poll takes the panel's thread limit and, when the bar entry
+// asks for toasts, --notify; --account all only once the CLI has shown it
+// knows accounts.
+function pollCommand(limit, withAccountFilter, notify) {
+  var command = ["hey", "omarchy", "poll", "--limit", String(positiveInteger(limit, 50)), "--json"]
+  if (withAccountFilter) command.splice(3, 0, "--account", "all")
+  if (notify === true) command.push("--notify")
+  return command
+}
+
+function parseScreenerCount(raw) {
+  var result = parseJson(raw)
+  if (!result.ok) return { ok: false, error: result.error, count: 0 }
+  var data = result.value.data && typeof result.value.data === "object" ? result.value.data : {}
+  var count = parseInt(String(data.pending_count === undefined ? "" : data.pending_count), 10)
+  if (!isFinite(count)) return { ok: false, error: "Could not parse the HEY Screener count", count: 0 }
+  return { ok: true, error: "", count: Math.max(0, count) }
 }
 
 function parseAccounts(raw) {
@@ -300,6 +343,12 @@ if (typeof module !== "undefined") {
     setupLaunchCommand: setupLaunchCommand,
     setupPlan: setupPlan,
     parseJson: parseJson,
+    parseFailure: parseFailure,
+    isAuthError: isAuthError,
+    cliTooOld: cliTooOld,
+    cliTooOldMessage: cliTooOldMessage,
+    pollCommand: pollCommand,
+    parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,
