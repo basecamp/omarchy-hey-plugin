@@ -118,11 +118,12 @@ function parseSemver(version) {
 }
 
 // An older CLI trips over a flag it does not have — `hey box --account` is
-// 0.2.0 — and a release older still has no `hey watch` and reports an unknown
-// command. The plugin only ever passes fixed flags, so either one means the
+// 0.2.0 — or an event it does not know — `hey watch --events new` is 0.2.0
+// too — and a release older still has no `hey watch` and reports an unknown
+// command. The plugin only ever passes fixed flags, so any of them means the
 // CLI is too old.
 function cliTooOld(stdout, stderr) {
-  return /unknown (command|flag)/i.test(String(stderr || "") + String(stdout || ""))
+  return /unknown (command|flag|event)/i.test(String(stderr || "") + String(stdout || ""))
 }
 
 // hey box imbox is the read: the panel's thread limit, and --account all once
@@ -138,10 +139,14 @@ function boxCommand(limit, withAccountFilter) {
 // a line per change, plus "ready", "disconnected" and "resync" about itself.
 // setpriv --pdeathsig ties it to the shell, so a shell that dies takes its
 // watch along instead of leaving one behind per restart. It watches every box
-// — a move out of the Imbox is written in the box the thread went to — and
-// says on every added and updated line whether the posting is new mail.
+// — a move out of the Imbox is written in the box the thread went to — across
+// every account, so a persisted `hey accounts use` filter cannot hide changes
+// from the panel, and it asks for every event by name: `new` so each added
+// and updated line says whether the thread is new mail, `resync` so a box
+// that skipped ahead is re-read. A CLI that does not know `new` refuses the
+// command up front instead of running a watch that never says it.
 function watchCommand() {
-  return ["setpriv", "--pdeathsig", "TERM", "hey", "watch"]
+  return ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"]
 }
 
 // watchLine reads one line from hey watch: its change — added, updated or

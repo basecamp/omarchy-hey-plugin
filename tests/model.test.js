@@ -40,8 +40,8 @@ test("boxCommand reads the Imbox for the panel's threads", () => {
   assert.deepEqual(Model.boxCommand("garbage", false), ["hey", "box", "imbox", "--limit", "50", "--json"])
 })
 
-test("watchCommand follows every box, tied to the shell", () => {
-  assert.deepEqual(Model.watchCommand(), ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+test("watchCommand follows every box of every account, tied to the shell, asking for every event", () => {
+  assert.deepEqual(Model.watchCommand(), ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
 })
 
 test("parseFailure reads the CLI's error envelope from stderr", () => {
@@ -54,9 +54,10 @@ test("parseFailure reads the CLI's error envelope from stderr", () => {
   assert.equal(Model.parseFailure("", "").code, "")
 })
 
-test("cliTooOld recognizes a CLI without hey watch or hey box --account", () => {
+test("cliTooOld recognizes a CLI without hey watch, hey box --account or --events new", () => {
   assert.equal(Model.cliTooOld("", 'Error: unknown command "watch" for "hey"'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
   assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })

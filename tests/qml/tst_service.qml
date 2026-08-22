@@ -175,7 +175,7 @@ TestCase {
     var watch = findWatchProcess()
     verify(watch !== null)
     verify(watch.running)
-    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
     compare(service.watching, true)
     // Alive is not the same as live: the watch has not said ready.
     compare(service.connected, false)
@@ -327,7 +327,7 @@ TestCase {
   function test_a_new_imbox_line_is_a_toast_from_the_plugin() {
     settleNotifying()
     var watch = findWatchProcess()
-    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
 
     watch.emitLine(newLunchLine)
     tick()
@@ -421,7 +421,7 @@ TestCase {
 
     service.settings = { notify: true }
     verify(before.running)
-    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "watch"])
+    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
     compare(service.watchRestartScheduled, false)
 
     // Off drops a toast that was about to go out.
@@ -519,6 +519,18 @@ TestCase {
 
     watch.complete(1, "", 'Error: unknown command "watch" for "hey"')
     compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.watchRestartScheduled, false)
+  }
+
+  function test_watch_without_the_new_event_reports_an_old_cli() {
+    settle()
+    var watch = findWatchProcess()
+
+    // A CLI with hey watch but no `new` event refuses the command up front,
+    // rather than running a watch that never says which threads are new.
+    watch.complete(2, "", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}')
+    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.watchError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
     compare(service.watchRestartScheduled, false)
   }
 

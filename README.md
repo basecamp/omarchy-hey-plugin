@@ -20,7 +20,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 ## Requirements
 
 - Omarchy with Quickshell plugin support.
-- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.0 or newer — the plugin runs `hey box imbox` and `hey watch`, whose lines say which threads are new mail. It is on the AUR:
+- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.0 or newer — the plugin runs `hey box imbox` and `hey watch --events …,new,resync`, whose lines say which threads are new mail. It is on the AUR:
 
   ```bash
   omarchy pkg aur add hey-cli
@@ -67,7 +67,7 @@ The plugin manifest declares the right bar section as its default placement.
 
 ## Live updates
 
-The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey watch` follows every HEY box over HEY's cable and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. The 10-minute re-read stays only as a safety net.
+The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey --account all watch --events added,updated,deleted,new,resync` follows every HEY box of every linked account over HEY's cable — a persisted `hey accounts use` filter cannot hide changes from the panel — and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. The 10-minute re-read stays only as a safety net.
 
 The bar logo's tooltip says `live` while the watch has said `ready` and not `disconnected` since. When the watch stops for a reason other than being signed out, the panel header says so and the plugin restarts it on a backoff (two seconds, doubling to a minute); signed out, it waits for you to sign in again.
 
@@ -90,7 +90,7 @@ hey version
 hey auth status --json
 hey accounts list --json
 hey box imbox --account all --limit <count> --json
-hey watch
+hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
 hey seen <posting-id> --json
 flock -n $XDG_RUNTIME_DIR/37signals.hey.setup.lock true
