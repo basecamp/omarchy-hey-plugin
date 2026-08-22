@@ -65,7 +65,7 @@ test("cliTooOld recognizes a CLI without hey watch, hey box --account or --event
 test("probeCommand asks for the version ahead of the auth status, through bash", () => {
   assert.equal(Model.probeCommand[0], "bash")
   assert.match(Model.probeCommand[2], /command -v hey/)
-  assert.match(Model.probeCommand[2], /hey version/)
+  assert.match(Model.probeCommand[2], /hey --version/)
   assert.match(Model.probeCommand[2], /hey auth status --json$/)
 })
 

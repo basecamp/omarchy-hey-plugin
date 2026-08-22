@@ -82,10 +82,12 @@ var minimumCliVersion = "0.2.0"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
 
 // The probe answers three questions in one process — is the CLI there, is it
-// new enough, is it signed in — by printing `hey version`'s line ahead of the
-// auth status. bash always exists, so the process always exits; a bare `hey`
-// would never report an exit when the binary is missing.
-var probeCommand = ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey version 2>/dev/null | head -n 1; hey auth status --json"]
+// new enough, is it signed in — by printing the version line ahead of the
+// auth status. `hey --version` is the one-liner (`hey version` answers the
+// JSON envelope once its output is a pipe). bash always exists, so the
+// process always exits; a bare `hey` would never report an exit when the
+// binary is missing.
+var probeCommand = ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey --version 2>/dev/null | head -n 1; hey auth status --json"]
 
 // parseProbe splits the probe's output into the version it read and the auth
 // status behind it. No version line — a build whose `hey version` failed, or a
