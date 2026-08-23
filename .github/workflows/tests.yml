@@ -23,6 +23,7 @@ jobs:
             qt6-declarative-dev-tools \
             qml6-module-qtqml-workerscript \
             qml6-module-qtquick \
+            qml6-module-qtquick-window \
             qml6-module-qttest
       - name: Run tests
         run: ./tests/run
