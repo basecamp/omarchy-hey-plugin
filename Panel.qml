@@ -476,8 +476,8 @@ Panel {
 
             // New-mail toasts, persisted on the bar entry; `hey setup omarchy
             // --notify` and `omarchy bar set 37signals.hey notify true` flip the
-            // same key. The enabled bell uses the bar's unread highlight; the
-            // disabled state uses the muted crossed-out bell.
+            // same key. The enabled state uses the muted solid bell; the
+            // disabled state uses the bar's unread highlight and a crossed-out bell.
             Text {
               id: notifyBell
               anchors.right: notifySwitch.left
@@ -485,7 +485,7 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               visible: !root.needsSetup
               text: service.notify ? "󰂚" : "󰂛"
-              color: service.notify ? root.urgent : root.dim
+              color: service.notify ? root.dim : root.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.icon
             }
