@@ -3,12 +3,28 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
+// The plugin's engine, instantiated once per shell as its `service` entry
+// point; every bar widget — one per monitor — reads this one instance, so one
+// `hey watch` runs however many bars there are. Panels push their settings in,
+// since the shell injects settings into widgets only.
 Item {
   id: root
 
+  property var shell: null
   property var settings: ({})
+  // A widget-local instance, built only under a shell without service
+  // support, must stay inert once a shared one exists: two watches and two
+  // refresh cycles per bar otherwise.
+  property bool active: true
   property bool refreshing: false
+  // A refresh asked for mid-fetch — a watch event landing during one, say — is
+  // not dropped: it runs once the current one settles.
+  property bool refreshPending: false
   property bool installed: true
+  // The probe read a version older than the minimum: the panel still reads
+  // the Imbox on the timer, but no watch runs — an old `hey watch` says
+  // neither ready nor which threads are new — and the header says to upgrade.
+  property bool cliOutdated: false
   property bool authenticated: true
   property bool probed: false
   property bool setupRunning: false
@@ -28,7 +44,45 @@ Item {
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 600, 60, 3600)
   readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
+  // New-mail toasts: the watch says on every line whether the thread is new
+  // mail, and the plugin toasts the Imbox's — one per burst at most, replacing
+  // the previous one, identified as HEY so Omarchy's notification silencing
+  // applies. Off unless the bar entry says true.
+  readonly property bool notify: setting("notify", false) === true
   readonly property int accountCount: accounts.length
+  // Every process a refresh drives; a pending refresh waits for all of them.
+  readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
+
+  // The watch: `hey watch` follows every box over HEY's cable and prints a line
+  // per change. A line is a wake-up — the Imbox is re-read, debounced — not a
+  // delta. It watches every box because a move out of the Imbox is written in
+  // the box the thread went to, never in the Imbox's own feed. The watch says
+  // "ready" once its cursors are set and its subscription is live (again after
+  // each reconnect's catch-up), and the read on that line is what makes the
+  // picture gap-free: anything before the cursor is in the read, anything
+  // after it is an event. It says "disconnected" when the cable drops, which
+  // is what `connected` follows — `watching` only says the process is alive.
+  readonly property bool watching: watchProcess.running
+  property bool connected: false
+  readonly property bool watchRestartScheduled: watchRestartTimer.running
+  property int watchDebounceMs: 300
+  property string watchError: ""
+  property int watchRestartMs: 0
+  property double watchStartedAtMs: 0
+  // A stop the service asked for still reports an exit; it is not a failure.
+  property bool _watchStopping: false
+  property string _watchLastStderr: ""
+  readonly property bool refreshAfterReadScheduled: refreshAfterRead.running
+  readonly property bool actionStatusScheduled: actionStatusTimer.running
+
+  // The toast: new Imbox lines collect for toastDebounceMs — one read's burst
+  // is one toast — and the daemon's printed id is kept so the next burst
+  // replaces the toast on screen instead of stacking.
+  property int toastDebounceMs: 1500
+  property var _toastQueue: []
+  property int _toastId: 0
+  property double _toastAtMs: 0
+  property string _toastOutput: ""
 
   property string _probeOutput: ""
   property string _probeErrorOutput: ""
@@ -79,7 +133,11 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running) return
+    if (!active) return
+    if (busy) {
+      refreshPending = true
+      return
+    }
     refreshing = true
     lastError = ""
     // Probe on every refresh: a bare `hey` process would never emit
@@ -102,20 +160,22 @@ Item {
       unreadCount = 0
       screenerCount = 0
       refreshing = false
+      stopWatch()
       return
     }
     installed = true
 
-    if (exitCode !== 0) {
-      authenticated = true
-      probeError = true
-      lastError = conciseError(errorText || text, "Could not check the HEY CLI")
-      refreshing = false
-      return
+    var probe = Model.parseProbe(text)
+    cliOutdated = Model.cliVersionTooOld(probe.version)
+    if (cliOutdated) {
+      lastError = Model.cliTooOldMessage
+      stopWatch()
     }
 
-    // A successful, well-formed auth response determines the setup state.
-    var result = Model.parseJson(text)
+    // Only a well-formed `auth status` success is authoritative for the
+    // authenticated flag. Errors and garbage get the error line instead —
+    // telling the user to log in can't fix those.
+    var result = Model.parseJson(probe.status)
     if (!result.ok || !result.value.data) {
       authenticated = true
       probeError = true
@@ -125,13 +185,13 @@ Item {
     }
     authenticated = result.value.data.authenticated === true
     if (!authenticated) {
-      notifications = []
-      unreadCount = 0
-      screenerCount = 0
-      refreshing = false
+      signedOut()
       return
     }
 
+    // Watch first, read second: anything that changed before the watch's
+    // cursor is in the read, anything after it wakes the watch.
+    startWatch()
     _accountsOutput = ""
     _accountsError = ""
     _screenerOutput = ""
@@ -149,12 +209,132 @@ Item {
   function fetchNotifications(withAccountFilter) {
     _notificationsOutput = ""
     _notificationsError = ""
-    var command = ["hey", "box", "imbox", "--limit", String(maxNotifications), "--json"]
-    // Always fetch every linked account so a persisted `hey accounts use`
-    // filter cannot hide mail from the panel.
-    if (withAccountFilter) command.splice(3, 0, "--account", "all")
-    notificationProcess.command = command
+    notificationProcess.command = Model.boxCommand(maxNotifications, withAccountFilter)
     notificationProcess.running = true
+  }
+
+  // A signed-out CLI, wherever a request found that out: nothing to read,
+  // and nothing to watch with — the watch would only exit the same way.
+  function signedOut() {
+    authenticated = false
+    notifications = []
+    unreadCount = 0
+    screenerCount = 0
+    refreshing = false
+    stopWatch()
+  }
+
+  function startWatch() {
+    if (!active || !probed || !installed || cliOutdated || !authenticated || watchProcess.running) return
+    watchRestartTimer.stop()
+    _watchLastStderr = ""
+    watchError = ""
+    watchStartedAtMs = Date.now()
+    watchProcess.command = Model.watchCommand()
+    watchProcess.running = true
+  }
+
+  function stopWatch() {
+    watchRestartTimer.stop()
+    watchDebounce.stop()
+    toastDebounce.stop()
+    _toastQueue = []
+    connected = false
+    if (watchProcess.running) {
+      _watchStopping = true
+      watchProcess.running = false
+    }
+  }
+
+  // A line from the watch. "ready" and "resync" are wake-ups like any change —
+  // the read on "ready" is the one that closes the startup gap — while
+  // "disconnected" only turns the live state off: there is nothing new to read
+  // until the watch catches up and says "ready" again. Wake-ups are debounced,
+  // so a burst of changes costs one read, plus one follow-up when changes land
+  // while a read is in flight, since that read may predate them. A line the
+  // CLI calls new mail in the Imbox is also a toast, when toasts are on.
+  function watchEvent(line) {
+    var event = Model.watchLine(line)
+    if (event === null) return
+    watchError = ""
+    if (event.change === "disconnected") {
+      connected = false
+      return
+    }
+    if (event.change === "ready") connected = true
+    if (notify && Model.newImboxMail(event)) collectToast(event)
+    watchDebounce.interval = watchDebounceMs
+    watchDebounce.restart()
+  }
+
+  function collectToast(event) {
+    var queue = _toastQueue.slice()
+    queue.push({ boxName: event.boxName, posting: event.posting })
+    _toastQueue = queue
+    toastDebounce.interval = toastDebounceMs
+    toastDebounce.restart()
+  }
+
+  // One toast for whatever collected: Sender — Subject for one thread, a count
+  // with the first senders for more, replacing the last toast while its id is
+  // recent enough to trust. A send still in flight keeps the queue for the
+  // next turn of the debounce rather than dropping it.
+  function sendToast() {
+    if (_toastQueue.length === 0) return
+    if (toastProcess.running) {
+      toastDebounce.restart()
+      return
+    }
+    var postings = []
+    for (var i = 0; i < _toastQueue.length; i++) postings.push(_toastQueue[i].posting)
+    var toast = Model.composeMailToast(_toastQueue[0].boxName, postings)
+    _toastQueue = []
+    _toastOutput = ""
+    toastProcess.command = Model.toastCommand(toast.headline, toast.description,
+      Model.replaceableToastId(_toastId, _toastAtMs, Date.now()))
+    toastProcess.running = true
+  }
+
+  // -p printed the daemon's id for the toast, which is what -r replaces next
+  // time. A send that failed is not the panel's error: the next burst toasts
+  // again.
+  function toastSent(exitCode, stdout) {
+    var id = parseInt(String(stdout || "").trim(), 10)
+    if (exitCode === 0 && isFinite(id) && id > 0) {
+      _toastId = id
+      _toastAtMs = Date.now()
+    }
+  }
+
+  function watchExited(exitCode) {
+    connected = false
+    watchDebounce.stop()
+    if (_watchStopping) {
+      // The service stopped it — signed out, the CLI gone, a local instance
+      // going inert. Not an error, and nothing to restart.
+      _watchStopping = false
+      return
+    }
+    var stderr = _watchLastStderr
+    var failure = Model.parseFailure("", stderr)
+    if (Model.isAuthError(failure.code)) {
+      // Signed out: the next probe that says otherwise starts the watch again.
+      authenticated = false
+      return
+    }
+    if (Model.cliTooOld("", stderr)) {
+      // Nothing to retry until the CLI is upgraded; the next refresh's probe
+      // tries again, by which time it may have been.
+      lastError = Model.cliTooOldMessage
+      watchError = Model.cliTooOldMessage
+      return
+    }
+    watchError = conciseError(failure.error || stderr, "HEY live updates stopped")
+    // A run that lasted a while resets the backoff; a quick exit doubles it.
+    var ranForMs = Date.now() - watchStartedAtMs
+    watchRestartMs = ranForMs > 60000 ? 2000 : Math.min(60000, Math.max(2000, watchRestartMs * 2))
+    watchRestartTimer.interval = watchRestartMs
+    watchRestartTimer.restart()
   }
 
   function finishRefresh(items) {
@@ -227,13 +407,87 @@ Item {
     readProcess.running = true
   }
 
+  // Flipping the toasts only gates what the watch's lines do; the watch itself
+  // runs on. Off drops whatever was about to toast.
+  onNotifyChanged: {
+    if (notify) return
+    toastDebounce.stop()
+    _toastQueue = []
+  }
+
+  onActiveChanged: if (!active) stopWatch()
+
+  // The follow-up refresh starts on the next turn of the event loop rather than
+  // inside busy's own change handler: refresh() flips the processes busy is
+  // made of, and doing that while busy is still being notified is a binding loop.
+  onBusyChanged: {
+    if (busy || !refreshPending) return
+    refreshPending = false
+    refreshSoon.restart()
+  }
+
+  // The timer is the safety net under the watch, not the mechanism.
   Timer {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
     repeat: true
-    running: true
+    running: root.active
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: watchRestartTimer
+    repeat: false
+    onTriggered: root.startWatch()
+  }
+
+  Timer {
+    id: watchDebounce
+    repeat: false
+    onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: toastDebounce
+    repeat: false
+    onTriggered: root.sendToast()
+  }
+
+  Process {
+    id: toastProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: toastStdout
+      waitForEnd: true
+      onStreamFinished: root._toastOutput = text
+    }
+    onExited: function(exitCode) {
+      root.toastSent(exitCode, String(toastStdout.text || root._toastOutput || ""))
+    }
+  }
+
+  Timer {
+    id: refreshSoon
+    interval: 0
+    repeat: false
+    onTriggered: root.refresh()
+  }
+
+  Process {
+    id: watchProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      onRead: function(data) { root.watchEvent(data) }
+    }
+    // Only the last line matters: the CLI's error envelope when the watch
+    // exits. A collector would hold a long run's warnings in memory for days.
+    stderr: SplitParser {
+      onRead: function(data) { root._watchLastStderr = String(data) }
+    }
+    onExited: function(exitCode, exitStatus) { root.watchExited(exitCode) }
   }
 
   Timer {
@@ -253,9 +507,7 @@ Item {
   Process {
     id: probeProcess
     running: false
-    // bash always exists, so `exited` always fires — a bare `hey`
-    // command would silently never exit when the binary is missing.
-    command: ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey auth status --json"]
+    command: Model.probeCommand
     stdout: StdioCollector {
       id: probeStdout
       waitForEnd: true
@@ -291,9 +543,8 @@ Item {
     onExited: function(exitCode) {
       var stdout = String(accountsStdout.text || root._accountsOutput || "")
       var stderr = String(accountsStderr.text || root._accountsError || "")
-      if (exitCode !== 0 && Model.parseJson(stdout).code === "auth_required") {
-        root.authenticated = false
-        root.refreshing = false
+      if (exitCode !== 0 && Model.isAuthError(Model.parseFailure(stdout, stderr).code)) {
+        root.signedOut()
         return
       }
       if (exitCode !== 0) {
@@ -337,12 +588,13 @@ Item {
       var stdout = String(notificationsStdout.text || root._notificationsOutput || "")
       var stderr = String(notificationsStderr.text || root._notificationsError || "")
       if (exitCode !== 0) {
-        if (Model.parseJson(stdout).code === "auth_required") {
-          root.authenticated = false
-          root.refreshing = false
+        var failure = Model.parseFailure(stdout, stderr)
+        if (Model.isAuthError(failure.code)) {
+          root.signedOut()
           return
         }
-        root.lastError = root.conciseError(stderr || stdout, "Could not list HEY emails")
+        if (Model.cliTooOld(stdout, stderr)) root.lastError = Model.cliTooOldMessage
+        else root.lastError = root.conciseError(failure.error || stderr || stdout, "Could not list HEY emails")
         root.refreshing = false
         return
       }
@@ -360,10 +612,8 @@ Item {
   Process {
     id: screenerProcess
     running: false
-    command: [
-      "bash", "-lc",
-      "token=$(hey auth token --quiet) && curl -fsS --connect-timeout 5 --max-time 15 -H \"Authorization: Bearer $token\" -H \"Accept: application/json\" https://app.hey.com/clearances.json"
-    ]
+    // The CLI's cheap count request; no token ever leaves its credential store.
+    command: ["hey", "screener", "list", "--count", "--json"]
     stdout: StdioCollector {
       id: screenerStdout
       waitForEnd: true
@@ -379,17 +629,15 @@ Item {
       var stderr = String(screenerStderr.text || root._screenerError || "")
       if (exitCode !== 0) {
         root.screenerCount = 0
-        root.lastError = root.conciseError(stderr || stdout, "Could not load the HEY Screener count")
+        root.lastError = root.conciseError(Model.parseFailure(stdout, stderr).error || stderr || stdout, "Could not load the HEY Screener count")
         return
       }
 
-      try {
-        var parsed = JSON.parse(stdout)
-        var count = parseInt(String(parsed.pending_clearances_count || 0), 10)
-        root.screenerCount = isFinite(count) ? Math.max(0, count) : 0
-      } catch (error) {
+      var parsed = Model.parseScreenerCount(stdout)
+      if (parsed.ok) root.screenerCount = parsed.count
+      else {
         root.screenerCount = 0
-        root.lastError = "Could not parse the HEY Screener count"
+        root.lastError = parsed.error
       }
     }
   }
@@ -423,15 +671,19 @@ Item {
       var stdout = String(readStdout.text || root._readOutput || "")
       var stderr = String(readStderr.text || root._readError || "")
       if (exitCode !== 0) {
-        root.lastError = root.conciseError(stderr || stdout, "Could not mark the email as seen")
+        root.lastError = root.conciseError(Model.parseFailure(stdout, stderr).error || stderr || stdout, "Could not mark the email as seen")
         root.actionStatus = root.lastError
       } else {
         root.actionStatus = "Marked as seen"
       }
       actionStatusTimer.restart()
       root._readingNotification = null
+      // The cable reports our own mark-as-seen back within a second; the
+      // delayed re-read is for when nothing is listening — and for a request
+      // that failed, which the cable has nothing to report and the panel
+      // has already marked seen.
       if (root._readQueue.length > 0) root.runNextRead()
-      else refreshAfterRead.restart()
+      else if (!root.connected || exitCode !== 0) refreshAfterRead.restart()
     }
   }
 }

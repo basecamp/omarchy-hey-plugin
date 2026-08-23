@@ -63,8 +63,23 @@ Panel {
     if (service.actionStatus !== "") return service.actionStatus
     if (service.lastError !== "") return service.lastError
     if (rotatingPhrases) return loadingPhrases[phraseIndex % loadingPhrases.length]
+    if (!service.connected && service.watchError !== "") return "Live updates paused — " + service.watchError
     return "Designed & built by 37signals"
   }
+
+  // One service per shell: the shell instantiates Service.qml once for the
+  // plugin and every bar widget — one per monitor — reads that instance, so
+  // one `hey watch` runs however many bars there are. A shell without service
+  // support gets a widget-local instance instead.
+  readonly property var sharedService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+    ? bar.shell.serviceFor(moduleName) : null
+  readonly property var service: sharedService || localService
+
+  // The shell injects settings into widgets, not services: push them across.
+  function pushSettings() { if (service) service.settings = settings }
+  onSettingsChanged: pushSettings()
+  onServiceChanged: pushSettings()
+  Component.onCompleted: pushSettings()
 
   function ensureAccountFilter() {
     if (accountFilter === "") return
@@ -111,6 +126,40 @@ Panel {
     if (!bar || !service.tryStartSetup()) return
     bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(setupPlan.launchCommand))
     close()
+  }
+
+  function refreshService() { service.refresh() }
+
+  // With the service shared, one refresh is the refresh. Under a shell without
+  // service support the bar — built once per monitor — holds a widget-local
+  // service per instance, and a refresh asked for over IPC is fanned out to
+  // every live one, the way the shell's own BarWidget.broadcast does.
+  function broadcastRefresh() {
+    if (sharedService) {
+      sharedService.refresh()
+      return
+    }
+    var items = bar && typeof bar.moduleWidgets === "function" ? bar.moduleWidgets(moduleName) : [root]
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && typeof items[i].refreshService === "function") items[i].refreshService()
+    }
+  }
+
+  // Settings live on this widget's entry in shell.json; the shell hot-reloads
+  // the file and every instance sees the new value. Applied locally first so
+  // the switch throws on the click, and the entry is merged from the current
+  // settings because updateEntryInline replaces it whole.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function toggleNotify() {
+    persistSettings({ notify: !service.notify })
   }
 
   property var avatarPalette: []
@@ -246,9 +295,13 @@ Panel {
   }
 
   Service {
-    id: service
-    settings: root.settings
-    onAccountsChanged: root.ensureAccountFilter()
+    id: localService
+    active: root.sharedService === null
+  }
+
+  Connections {
+    target: root.service
+    function onAccountsChanged() { root.ensureAccountFilter() }
   }
 
   Timer {
@@ -291,10 +344,10 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { service.refresh(); return "ok" }
+    function refresh(): string { root.broadcastRefresh(); return "ok" }
     function setupFinished(): string {
       service.finishSetup()
-      service.refresh()
+      root.broadcastRefresh()
       return "ok"
     }
     function unread(): int { return service.unreadCount }
@@ -304,10 +357,14 @@ Panel {
         notifications: service.notifications.length,
         unread: service.unreadCount,
         screener: service.screenerCount,
+        notify: service.notify,
         visible: root.filteredNotifications.length,
         stateFilter: root.stateFilter,
         accountFilter: root.accountFilter,
         refreshing: service.refreshing,
+        watching: service.watching,
+        connected: service.connected,
+        watchError: service.watchError,
         palette: root.avatarPalette.length,
         error: service.lastError
       })
@@ -330,6 +387,7 @@ Panel {
     tooltipText: service.refreshing
       ? "Refreshing HEY email"
       : (service.unreadCount === 1 ? "1 unread HEY email" : service.unreadCount + " unread HEY emails")
+        + (service.connected ? " · live" : "")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
       else root.toggle()
@@ -362,6 +420,7 @@ Panel {
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
         else if (text === "s" || text === "S") Qt.openUrlExternally("https://app.hey.com/clearances")
+        else if (text === "n" || text === "N") root.toggleNotify()
       }
 
       ColumnLayout {
@@ -390,7 +449,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: refreshButton.left
+              anchors.right: notifySwitch.left
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -412,6 +471,27 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
+              }
+            }
+
+            // New-mail toasts, persisted on the bar entry; `hey setup omarchy
+            // --notify` and `omarchy bar set 37signals.hey notify true` flip the
+            // same key.
+            ToggleSwitch {
+              id: notifySwitch
+              anchors.right: refreshButton.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              visible: !root.needsSetup
+              checked: service.notify
+              foreground: root.foreground
+              trackHeight: Style.space(18)
+              onToggled: root.toggleNotify()
+
+              PanelToolTip {
+                visible: notifySwitch.containsMouse
+                text: service.notify ? "New-mail notifications on" : "New-mail notifications off"
+                fontFamily: root.fontFamily
               }
             }
 

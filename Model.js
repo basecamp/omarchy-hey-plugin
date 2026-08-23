@@ -33,9 +33,9 @@ function setupPlan(installed, authenticated, ipcTarget) {
   }
   if (installed !== true) {
     plan.title = "HEY CLI is required"
-    plan.command = "omarchy pkg add hey-cli"
+    plan.command = "omarchy pkg aur add hey-cli"
     plan.buttonLabel = "Install HEY CLI…"
-    plan.fix = "omarchy-pkg-add hey-cli && hey auth login"
+    plan.fix = "omarchy-pkg-aur-add hey-cli && hey auth login"
   }
   plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
   return plan
@@ -60,6 +60,222 @@ function parseJson(raw) {
   } catch (error) {
     return { ok: false, error: "Could not parse the HEY CLI response", code: "" }
   }
+}
+
+// The CLI writes its error envelope to stderr and nothing to stdout, so a
+// failed command is read from whichever stream carried it. `auth` is the
+// CLI's code for a signed-out state; `auth_required` is kept for older
+// builds.
+function parseFailure(stdout, stderr) {
+  var text = String(stderr || "").trim() !== "" ? stderr : stdout
+  var result = parseJson(text)
+  if (result.ok) return { ok: false, error: "The HEY CLI request failed", code: "", hint: "" }
+  return result
+}
+
+function isAuthError(code) {
+  var value = String(code || "")
+  return value === "auth" || value === "auth_required"
+}
+
+var minimumCliVersion = "0.2.0"
+var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
+
+// The probe answers three questions in one process — is the CLI there, is it
+// new enough, is it signed in — by printing the version line ahead of the
+// auth status. `hey --version` is the one-liner (`hey version` answers the
+// JSON envelope once its output is a pipe). bash always exists, so the
+// process always exits; a bare `hey` would never report an exit when the
+// binary is missing.
+var probeCommand = ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey --version 2>/dev/null | head -n 1; hey auth status --json"]
+
+// parseProbe splits the probe's output into the version it read and the auth
+// status behind it. No version line — a build whose `hey version` failed, or a
+// test feeding the status alone — leaves the version unknown, not wrong.
+function parseProbe(text) {
+  var raw = String(text || "")
+  var match = raw.match(/^\s*hey version (\S+)[^\n]*\n?/)
+  if (!match) return { version: "", status: raw }
+  return { version: match[1], status: raw.substring(match[0].length) }
+}
+
+// cliVersionTooOld says whether a version the probe read is older than the
+// minimum. `hey watch` exists before 0.2.0 but says neither ready nor which
+// threads are new, so an old watch would run and never be live; the version
+// is how that is caught up front. A dev build, or a version that does not
+// read as one, is not held against the CLI.
+function cliVersionTooOld(version) {
+  var parts = parseSemver(version)
+  if (!parts) return false
+  var minimum = parseSemver(minimumCliVersion)
+  for (var i = 0; i < 3; i++) {
+    if (parts[i] !== minimum[i]) return parts[i] < minimum[i]
+  }
+  return false
+}
+
+function parseSemver(version) {
+  var match = String(version || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)/)
+  return match ? [parseInt(match[1], 10), parseInt(match[2], 10), parseInt(match[3], 10)] : null
+}
+
+// An older CLI trips over a flag it does not have — `hey box --account` is
+// 0.2.0 — or an event it does not know — `hey watch --events new` is 0.2.0
+// too — and a release older still has no `hey watch` and reports an unknown
+// command. The plugin only ever passes fixed flags, so any of them means the
+// CLI is too old.
+function cliTooOld(stdout, stderr) {
+  return /unknown (command|flag|event)/i.test(String(stderr || "") + String(stdout || ""))
+}
+
+// hey box imbox is the read: the panel's thread limit, and --account all once
+// the CLI has shown it knows accounts, so a persisted `hey accounts use`
+// filter cannot hide mail from the panel.
+function boxCommand(limit, withAccountFilter) {
+  var command = ["hey", "box", "imbox", "--limit", String(positiveInteger(limit, 50)), "--json"]
+  if (withAccountFilter) command.splice(3, 0, "--account", "all")
+  return command
+}
+
+// hey watch is the wake-up: it follows every box over HEY's cable and prints
+// a line per change, plus "ready", "disconnected" and "resync" about itself.
+// setpriv --pdeathsig ties it to the shell, so a shell that dies takes its
+// watch along instead of leaving one behind per restart. It watches every box
+// — a move out of the Imbox is written in the box the thread went to — across
+// every account, so a persisted `hey accounts use` filter cannot hide changes
+// from the panel, and it asks for every event by name: `new` so each added
+// and updated line says whether the thread is new mail, `resync` so a box
+// that skipped ahead is re-read. A CLI that does not know `new` refuses the
+// command up front instead of running a watch that never says it.
+function watchCommand() {
+  return ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"]
+}
+
+// watchLine reads one line from hey watch: its change — added, updated or
+// deleted for a thread; ready, disconnected or resync about the watch — and,
+// for a thread, whether the CLI called it new mail, the box it is in and the
+// posting itself. A blank line is nothing; a line that is not JSON — there are
+// none, but stdout is stdout — counts as a change.
+function watchLine(line) {
+  var text = String(line || "").trim()
+  if (text === "") return null
+  var event = { change: "unknown", isNew: false, boxKind: "", boxName: "", posting: null }
+  try {
+    var value = JSON.parse(text)
+    if (!value || typeof value.change !== "string") return event
+    event.change = value.change
+    event.isNew = value["new"] === true
+    if (value.box && typeof value.box === "object") {
+      event.boxKind = String(value.box.kind || "")
+      event.boxName = cleanText(value.box.name || "")
+    }
+    if (value.posting && typeof value.posting === "object") event.posting = value.posting
+    return event
+  } catch (error) {
+    return event
+  }
+}
+
+// The toast. What counts as new is the CLI's call, made on every line; what
+// to do about it is the plugin's: the Imbox only, since HEY's attention model
+// puts new mail in one place, one toast per burst, replaced rather than
+// stacked, under the app-name HEY so Omarchy's notification silencing applies
+// (its own `omarchy-action` pops through DND on purpose), with the bar's
+// envelope as the glyph and a click that focuses the TUI. The exec runs on the
+// shell's side, so it survives shell restarts.
+var toastAppName = "HEY"
+var toastGlyph = ""  // nf-fa-envelope, the bar's own
+var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui"
+// Notification ids are daemon-local, not stable identities: after a shell
+// restart the same number may belong to another application's notification,
+// and -r would overwrite that instead of replacing ours. Replacement only
+// matters for back-to-back bursts, so a short window loses nothing.
+var toastReplaceWindowMs = 10 * 60 * 1000
+
+function newImboxMail(event) {
+  return !!event && event.isNew === true && event.boxKind === "imbox" && event.posting !== null
+}
+
+function postingSender(posting) {
+  var creator = posting && posting.creator && typeof posting.creator === "object" ? posting.creator : {}
+  return cleanText(posting.alternative_sender_name || creator.name || creator.email_address || "")
+}
+
+function postingSubject(posting) {
+  return cleanText(posting.name || posting.summary || "")
+}
+
+// composeMailToast turns one burst of new postings into a headline and a
+// description: `Sender — Subject` for a single thread, a count with the first
+// few senders for more.
+function composeMailToast(boxName, postings) {
+  var fresh = Array.isArray(postings) ? postings : []
+  if (fresh.length === 1) {
+    var posting = fresh[0]
+    var description = cleanText(posting.summary || "")
+    if (description === postingSubject(posting)) description = ""  // the summary already stood in for a missing subject
+    return { headline: postingSender(posting) + " — " + postingSubject(posting), description: description }
+  }
+
+  var senders = []
+  for (var i = 0; i < fresh.length; i++) {
+    if (senders.length === 3) {
+      senders.push("…")
+      break
+    }
+    senders.push(postingSender(fresh[i]))
+  }
+  return { headline: fresh.length + " new in " + (cleanText(boxName) || "Imbox"), description: senders.join(", ") }
+}
+
+// notificationText keeps mail-derived text from being read as an option:
+// notify-send parses a leading dash wherever it appears, and a subject or
+// summary can start with one. A word joiner is invisible on screen but makes
+// the argument a plain positional.
+function notificationText(text) {
+  var value = String(text || "")
+  return value.charAt(0) === "-" ? "\u2060" + value : value
+}
+
+// replaceableToastId is the last toast's id while it is recent enough to
+// trust, and 0 otherwise.
+function replaceableToastId(id, atMs, nowMs) {
+  var value = Number(id || 0)
+  if (!isFinite(value) || value <= 0) return 0
+  return Number(nowMs) - Number(atMs || 0) > toastReplaceWindowMs ? 0 : value
+}
+
+// toastCommand is the argv: omarchy-notification-send takes its own options
+// first, then the headline and the description, then anything for
+// notify-send — -p to print the daemon's id, -r to replace the last one.
+function toastCommand(headline, description, replaceId) {
+  var command = [
+    "omarchy-notification-send",
+    "--glyph", toastGlyph,
+    "--app-name", toastAppName,
+    "-u", "low",
+    "--exec", toastFocusCommand,
+    notificationText(headline)
+  ]
+  if (String(description || "") !== "") command.push(notificationText(description))
+  command.push("-p")
+  var id = Number(replaceId || 0)
+  if (isFinite(id) && id > 0) command.push("-r", String(id))
+  return command
+}
+
+// `hey screener list --count --json` answers a bare number since the global
+// --count took over from the command's own flag; older CLIs answer the envelope
+// with `data.pending_count`. Both are a count.
+function parseScreenerCount(raw) {
+  var text = String(raw || "").trim()
+  if (/^\d+$/.test(text)) return { ok: true, count: parseInt(text, 10) }
+  var result = parseJson(raw)
+  if (!result.ok) return { ok: false, error: result.error, count: 0 }
+  var data = result.value.data && typeof result.value.data === "object" ? result.value.data : {}
+  var count = parseInt(String(data.pending_count === undefined ? "" : data.pending_count), 10)
+  if (!isFinite(count)) return { ok: false, error: "Could not parse the HEY Screener count", count: 0 }
+  return { ok: true, error: "", count: Math.max(0, count) }
 }
 
 function parseAccounts(raw) {
@@ -300,6 +516,26 @@ if (typeof module !== "undefined") {
     setupLaunchCommand: setupLaunchCommand,
     setupPlan: setupPlan,
     parseJson: parseJson,
+    parseFailure: parseFailure,
+    isAuthError: isAuthError,
+    cliTooOld: cliTooOld,
+    cliTooOldMessage: cliTooOldMessage,
+    probeCommand: probeCommand,
+    parseProbe: parseProbe,
+    cliVersionTooOld: cliVersionTooOld,
+    boxCommand: boxCommand,
+    watchCommand: watchCommand,
+    watchLine: watchLine,
+    newImboxMail: newImboxMail,
+    composeMailToast: composeMailToast,
+    notificationText: notificationText,
+    replaceableToastId: replaceableToastId,
+    toastCommand: toastCommand,
+    toastAppName: toastAppName,
+    toastGlyph: toastGlyph,
+    toastFocusCommand: toastFocusCommand,
+    toastReplaceWindowMs: toastReplaceWindowMs,
+    parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,

@@ -2,19 +2,21 @@
   "schemaVersion": 1,
   "id": "37signals.hey",
   "name": "HEY",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "37signals",
   "license": "MIT",
-  "description": "Unread email from HEY through the HEY CLI.",
+  "description": "Unread email from HEY, live over HEY's cable, with new-mail notifications — through the HEY CLI.",
   "kinds": [
+    "service",
     "bar-widget"
   ],
   "entryPoints": {
+    "service": "Service.qml",
     "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "HEY",
-    "description": "Unread count and recent email from the HEY Imbox across linked accounts.",
+    "description": "Unread count and recent email from the HEY Imbox across linked accounts, updated as it changes.",
     "category": "Communication",
     "aliases": [
       "hey",
@@ -25,7 +27,8 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 600,
-      "maxNotifications": 50
+      "maxNotifications": 50,
+      "notify": false
     },
     "schema": [
       {
@@ -45,6 +48,12 @@
         "max": 100,
         "step": 10,
         "defaultValue": 50
+      },
+      {
+        "key": "notify",
+        "type": "boolean",
+        "label": "New-mail notifications",
+        "defaultValue": false
       }
     ]
   }

@@ -3,24 +3,6 @@ const assert = require("node:assert/strict")
 
 const Model = require("../Model.js")
 
-function response(data) {
-  return JSON.stringify({ ok: true, data })
-}
-
-function posting(overrides = {}) {
-  return {
-    id: "email-1",
-    account_id: "account-1",
-    name: "A new message",
-    summary: "Message summary",
-    creator: { name: "Ada Lovelace" },
-    active_at: "2025-02-03T12:00:00Z",
-    app_url: "https://app.hey.com/topics/email-1",
-    seen: false,
-    ...overrides
-  }
-}
-
 test("setupPlan signs in when the HEY CLI is installed", () => {
   const plan = Model.setupPlan(true, false, "37signals.hey")
 
@@ -38,13 +20,12 @@ test("setupPlan installs the HEY CLI before signing in", () => {
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "HEY CLI is required")
   assert.equal(plan.buttonLabel, "Install HEY CLI…")
-  assert.equal(plan.command, "omarchy pkg add hey-cli")
+  assert.equal(plan.command, "omarchy pkg aur add hey-cli")
   assert.equal(plan.launchCommand,
-    Model.setupLaunchCommand("omarchy-pkg-add hey-cli && hey auth login", "37signals.hey"))
+    Model.setupLaunchCommand("omarchy-pkg-aur-add hey-cli && hey auth login", "37signals.hey"))
 })
 
-test("setupPlan prioritizes installation and is not needed when setup is complete", () => {
-  assert.equal(Model.setupPlan(false, true, "37signals.hey").title, "HEY CLI is required")
+test("setupPlan is not needed when setup is complete", () => {
   assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
 })
 
@@ -53,245 +34,152 @@ test("setupLockPath uses the runtime directory with a safe fallback", () => {
   assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
 })
 
-test("setupLaunchCommand safely quotes the IPC target", () => {
-  const command = Model.setupLaunchCommand("true", "target's name")
-  assert.match(command, /target='target'\\''s name'/)
-  assert.match(command, /setupFinished/)
-  assert.match(command, /exit 75/)
+test("boxCommand reads the Imbox for the panel's threads", () => {
+  assert.deepEqual(Model.boxCommand(50, false), ["hey", "box", "imbox", "--limit", "50", "--json"])
+  assert.deepEqual(Model.boxCommand(20, true), ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
+  assert.deepEqual(Model.boxCommand("garbage", false), ["hey", "box", "imbox", "--limit", "50", "--json"])
 })
 
-test("parseJson accepts successful objects and reports CLI errors", () => {
-  assert.deepEqual(Model.parseJson('{"ok":true,"data":{"authenticated":true}}'), {
-    ok: true,
-    value: { ok: true, data: { authenticated: true } }
-  })
-  assert.deepEqual(Model.parseJson('{"ok":false,"code":"auth_required","error":" Sign &amp; in ","hint":" Try again "}'), {
-    ok: false,
-    error: "Sign & in",
-    code: "auth_required",
-    hint: "Try again"
-  })
+test("watchCommand follows every box of every account, tied to the shell, asking for every event", () => {
+  assert.deepEqual(Model.watchCommand(), ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
 })
 
-test("parseJson rejects empty, malformed, and primitive responses", () => {
-  assert.deepEqual(Model.parseJson(""), {
-    ok: false, error: "The HEY CLI returned no data", code: ""
-  })
-  assert.deepEqual(Model.parseJson("{"), {
-    ok: false, error: "Could not parse the HEY CLI response", code: ""
-  })
-  assert.deepEqual(Model.parseJson("null"), {
-    ok: false, error: "The HEY CLI returned invalid data", code: ""
-  })
-  assert.deepEqual(Model.parseJson("[]"), {
-    ok: false, error: "The HEY CLI returned invalid data", code: ""
-  })
-  assert.deepEqual(Model.parseJson("42"), {
-    ok: false, error: "The HEY CLI returned invalid data", code: ""
-  })
+test("parseFailure reads the CLI's error envelope from stderr", () => {
+  const failure = Model.parseFailure("", '{"ok":false,"error":"not logged in","code":"auth","hint":"Run: hey auth login"}')
+  assert.equal(failure.code, "auth")
+  assert.equal(failure.error, "not logged in")
+  assert.equal(Model.isAuthError(failure.code), true)
+  assert.equal(Model.isAuthError("auth_required"), true)
+  assert.equal(Model.isAuthError("network"), false)
+  assert.equal(Model.parseFailure("", "").code, "")
 })
 
-test("parseAccounts removes pseudo-accounts and normalizes names and order", () => {
-  const parsed = Model.parseAccounts(response([
-    { id: "all", name: "All" },
-    { id: " 1 ", name: " Work &amp; Stuff " },
-    { id: 2, name: "" },
-    { id: "", name: "Missing" }
-  ]))
-
-  assert.deepEqual(parsed, {
-    ok: true,
-    error: "",
-    accounts: [
-      { id: "1", name: "Work & Stuff", order: 0 },
-      { id: "2", name: "Account 2", order: 1 }
-    ]
-  })
+test("cliTooOld recognizes a CLI without hey watch, hey box --account or --events new", () => {
+  assert.equal(Model.cliTooOld("", 'Error: unknown command "watch" for "hey"'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}'), true)
+  assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
+  assert.match(Model.cliTooOldMessage, /0\.2\.0/)
 })
 
-test("parseAccounts returns an empty list for CLI errors or missing data", () => {
-  assert.deepEqual(Model.parseAccounts('{"ok":false,"error":"nope"}'), {
-    ok: false, error: "nope", accounts: []
-  })
-  assert.deepEqual(Model.parseAccounts(response({ accounts: [] })).accounts, [])
+test("probeCommand asks for the version ahead of the auth status, through bash", () => {
+  assert.equal(Model.probeCommand[0], "bash")
+  assert.match(Model.probeCommand[2], /command -v hey/)
+  assert.match(Model.probeCommand[2], /hey --version/)
+  assert.match(Model.probeCommand[2], /hey auth status --json$/)
 })
 
-test("parseNotifications normalizes postings and account metadata", () => {
-  const parsed = Model.parseNotifications(response({ postings: [
-    posting({
-      creator: { name: "Ada &amp; Bob", initials: "AB" },
-      name: "<b>Hello</b>",
-      summary: "First<br>Second",
-      entry_kind: "email",
-      visible_entry_count: 3
-    })
-  ] }), 50, [{ id: "account-1", name: "Personal", order: 3 }])
-
-  assert.equal(parsed.ok, true)
-  assert.deepEqual(parsed.items[0], {
-    id: "email-1",
-    accountId: "account-1",
-    accountName: "Personal",
-    accountOrder: 3,
-    title: "Hello",
-    excerpt: "First Second",
-    project: "",
-    creator: "Ada & Bob",
-    initials: "AB",
-    type: "email",
-    timestamp: "2025-02-03T12:00:00Z",
-    timestampMs: Date.parse("2025-02-03T12:00:00Z"),
-    url: "https://app.hey.com/topics/email-1",
-    unread: true,
-    unreadCount: 3
-  })
+test("parseProbe splits the version line from the auth status", () => {
+  const probe = Model.parseProbe('hey version 0.2.0\n{"ok":true,"data":{"authenticated":true}}\n')
+  assert.equal(probe.version, "0.2.0")
+  assert.equal(Model.parseJson(probe.status).value.data.authenticated, true)
+  assert.deepEqual(Model.parseProbe('{"ok":true,"data":{"authenticated":false}}'), { version: "", status: '{"ok":true,"data":{"authenticated":false}}' })
+  assert.equal(Model.parseProbe("hey version dev\n{}").version, "dev")
 })
 
-test("parseNotifications uses fallbacks and ignores postings without IDs", () => {
-  const parsed = Model.parseNotifications(response({ postings: [
-    posting({ id: "", name: "ignored" }),
-    posting({
-      id: 42,
-      name: "",
-      summary: "",
-      creator: null,
-      alternative_sender_name: "Grace Hopper",
-      active_at: "not-a-date",
-      created_at: "also-invalid",
-      seen: true,
-      kind: "letter"
-    })
-  ] }), "invalid", [])
-
-  assert.equal(parsed.items.length, 1)
-  assert.equal(parsed.items[0].id, "42")
-  assert.equal(parsed.items[0].title, "HEY email")
-  assert.equal(parsed.items[0].creator, "Grace Hopper")
-  assert.equal(parsed.items[0].initials, "GH")
-  assert.equal(parsed.items[0].timestampMs, 0)
-  assert.equal(parsed.items[0].unread, false)
+test("cliVersionTooOld holds a release below the minimum against the CLI, and nothing else", () => {
+  assert.equal(Model.cliVersionTooOld("0.1.1"), true)
+  assert.equal(Model.cliVersionTooOld("v0.1.9"), true)
+  assert.equal(Model.cliVersionTooOld("0.2.0"), false)
+  assert.equal(Model.cliVersionTooOld("0.10.0"), false)
+  assert.equal(Model.cliVersionTooOld("1.0.0"), false)
+  assert.equal(Model.cliVersionTooOld("dev"), false)
+  assert.equal(Model.cliVersionTooOld(""), false)
 })
 
-test("parseNotifications sorts unread first and applies a positive limit", () => {
-  const postings = [
-    posting({ id: "seen-new", active_at: "2025-03-01T00:00:00Z", seen: true }),
-    posting({ id: "unread-old", active_at: "2025-01-01T00:00:00Z", seen: false }),
-    posting({ id: "unread-new", active_at: "2025-02-01T00:00:00Z", seen: false })
-  ]
-
-  assert.deepEqual(
-    Model.parseNotifications(response({ postings }), 2, []).items.map(item => item.id),
-    ["unread-new", "unread-old"]
-  )
+test("parseScreenerCount reads a bare number as well as the older envelope", () => {
+  assert.deepEqual(Model.parseScreenerCount("0\n"), { ok: true, count: 0 })
+  assert.deepEqual(Model.parseScreenerCount("12"), { ok: true, count: 12 })
 })
 
-test("parseNotifications reports malformed payloads and accepts missing postings", () => {
-  assert.deepEqual(Model.parseNotifications("bad json", 50, []), {
-    ok: false, error: "Could not parse the HEY CLI response", items: []
-  })
-  assert.deepEqual(Model.parseNotifications(response({}), 50, []).items, [])
+test("watchLine reads a hey watch line: the change, the box, and whether it is new mail", () => {
+  const added = Model.watchLine('{"change":"added","posting_id":9001,"box":{"id":24088,"kind":"imbox","name":"Imbox"},"new":true,"posting":{"id":9001,"name":"Lunch on Thursday?"}}')
+  assert.equal(added.change, "added")
+  assert.equal(added.isNew, true)
+  assert.equal(added.boxKind, "imbox")
+  assert.equal(added.boxName, "Imbox")
+  assert.equal(added.posting.name, "Lunch on Thursday?")
+  assert.equal(Model.newImboxMail(added), true)
+
+  const notNew = Model.watchLine('{"change":"updated","posting_id":9001,"box":{"kind":"imbox","name":"Imbox"},"new":false,"posting":{"id":9001}}')
+  assert.equal(notNew.isNew, false)
+  assert.equal(Model.newImboxMail(notNew), false)
+
+  const feed = Model.watchLine('{"change":"added","posting_id":9002,"box":{"kind":"feedbox","name":"The Feed"},"new":true,"posting":{"id":9002}}')
+  assert.equal(Model.newImboxMail(feed), false, "new mail in The Feed is not the Imbox's")
+
+  const ready = Model.watchLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+  assert.equal(ready.change, "ready")
+  assert.equal(ready.isNew, false)
+  assert.equal(ready.posting, null)
+  assert.equal(Model.watchLine("   "), null)
+  assert.equal(Model.watchLine("not json").change, "unknown")
+  assert.equal(Model.newImboxMail(null), false)
 })
 
-test("sortNotifications is non-mutating and uses account order then ID for ties", () => {
-  const items = [
-    { id: "z", unread: true, timestampMs: 1, accountOrder: 2 },
-    { id: "b", unread: true, timestampMs: 1, accountOrder: 1 },
-    { id: "a", unread: true, timestampMs: 1, accountOrder: 1 }
-  ]
-  const sorted = Model.sortNotifications(items)
-
-  assert.notEqual(sorted, items)
-  assert.deepEqual(sorted.map(item => item.id), ["a", "b", "z"])
-  assert.deepEqual(items.map(item => item.id), ["z", "b", "a"])
-  assert.deepEqual(Model.sortNotifications(null), [])
-})
-
-test("filterNotifications combines account and state filters", () => {
-  const items = [
-    { id: "a", accountId: "1", unread: true },
-    { id: "b", accountId: "1", unread: false },
-    { id: "c", accountId: "2", unread: true }
-  ]
-
-  assert.deepEqual(Model.filterNotifications(items, "1", "unread").map(item => item.id), ["a"])
-  assert.deepEqual(Model.filterNotifications(items, "1", "previous").map(item => item.id), ["b"])
-  assert.deepEqual(Model.filterNotifications(items, "", "all").map(item => item.id), ["a", "b", "c"])
-  assert.deepEqual(Model.filterNotifications(null, "", "all"), [])
-})
-
-test("accountFilterOptions sorts accounts without mutating them", () => {
-  const accounts = [{ id: 2, name: "Zulu" }, { id: 1, name: "alpha" }, { id: 3 }]
-  assert.deepEqual(Model.accountFilterOptions(accounts), [
-    { value: "", label: "All accounts" },
-    { value: "1", label: "alpha" },
-    { value: "3", label: "HEY" },
-    { value: "2", label: "Zulu" }
+test("composeMailToast headlines one thread as Sender — Subject", () => {
+  const toast = Model.composeMailToast("Imbox", [
+    { id: 9001, name: "Lunch on Thursday?", summary: "Are you free around noon?", creator: { name: "Maria Delgado" } }
   ])
-  assert.equal(accounts[0].name, "Zulu")
-  assert.deepEqual(Model.accountFilterOptions(null), [{ value: "", label: "All accounts" }])
+  assert.equal(toast.headline, "Maria Delgado — Lunch on Thursday?")
+  assert.equal(toast.description, "Are you free around noon?")
 })
 
-test("computeInitials handles names, punctuation, and empty values", () => {
-  assert.equal(Model.computeInitials("Ada Lovelace"), "AL")
-  assert.equal(Model.computeInitials("prince"), "P")
-  assert.equal(Model.computeInitials("  @Ada  #Lovelace  Third "), "T")
-  assert.equal(Model.computeInitials(""), "?")
+test("composeMailToast drops a description that already stood in for the subject", () => {
+  const toast = Model.composeMailToast("Imbox", [
+    { id: 9001, summary: "Your August invoice is attached.", creator: { email_address: "billing@example.com" } }
+  ])
+  assert.equal(toast.headline, "billing@example.com — Your August invoice is attached.")
+  assert.equal(toast.description, "")
 })
 
-test("themeAvatarPalette supports both schemas, preserves slot order, and deduplicates colors", () => {
-  const palette = Model.themeAvatarPalette(`
-    bright_blue = "#AABBCC"
-    red = '#112233'
-    color1 = "#112233"
-    color2 = "#445566"
-    foreground = "#ffffff"
-    color3 = "invalid"
-  `)
-
-  assert.deepEqual(palette, ["#112233", "#445566", "#AABBCC"])
-  assert.deepEqual(Model.themeAvatarPalette(null), [])
+test("composeMailToast counts a burst and lists the first senders", () => {
+  const toast = Model.composeMailToast("Imbox", [
+    { id: 9001, name: "Lunch on Thursday?", creator: { name: "Maria Delgado" }, alternative_sender_name: "Maria (personal)" },
+    { id: 9002, name: "Invoice #4021", creator: { name: "Northwind Invoicing" } },
+    { id: 9003, name: "Draft agenda for Monday", creator: { name: "Sam Whitfield" } },
+    { id: 9004, name: "Photos from the offsite", creator: { name: "Priya Raman" } }
+  ])
+  assert.equal(toast.headline, "4 new in Imbox")
+  assert.equal(toast.description, "Maria (personal), Northwind Invoicing, Sam Whitfield, …")
 })
 
-test("avatarColorIndex is stable, bounded, and safe without a palette", () => {
-  const first = Model.avatarColorIndex("Ada Lovelace", 6)
-  assert.equal(first, Model.avatarColorIndex("Ada Lovelace", 6))
-  assert.ok(first >= 0 && first < 6)
-  assert.equal(Model.avatarColorIndex("Ada", 0), 0)
-  assert.equal(Model.avatarColorIndex("Ada", "invalid"), 0)
+test("toastCommand goes out as HEY with the glyph, the focus exec and -p, replacing a recent toast", () => {
+  const first = Model.toastCommand("Maria Delgado — Lunch on Thursday?", "Are you free around noon?", 0)
+  assert.deepEqual(first, [
+    "omarchy-notification-send",
+    "--glyph", Model.toastGlyph,
+    "--app-name", "HEY",
+    "-u", "low",
+    "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
+    "Maria Delgado — Lunch on Thursday?",
+    "Are you free around noon?",
+    "-p"
+  ])
+  const second = Model.toastCommand("2 new in Imbox", "", 42)
+  assert.deepEqual(second.slice(-4), ["2 new in Imbox", "-p", "-r", "42"])
 })
 
-test("notificationBadgeText shows a count or close glyph", () => {
-  assert.equal(Model.notificationBadgeText({ unreadCount: 4 }, false), "4")
-  assert.equal(Model.notificationBadgeText({ unreadCount: 0 }, false), "1")
-  assert.equal(Model.notificationBadgeText(null, false), "1")
-  assert.equal(Model.notificationBadgeText({ unreadCount: 4 }, true), "󰅖")
-})
-
-test("cleanText removes markup, decodes entities, and rejects objects", () => {
-  assert.equal(Model.cleanText(` A\\n<br> B &nbsp; &lt;x&gt; &amp; &#39;y&#39; &quot;`), "A B <x> & 'y' \"")
-  assert.equal(Model.cleanText({ text: "no" }), "")
-  assert.equal(Model.cleanText(null), "")
-})
-
-test("notificationTime formats today, earlier dates, other years, and invalid values", () => {
-  const now = new Date(2025, 5, 10, 15, 0, 0).getTime()
-  assert.equal(Model.notificationTime(new Date(2025, 5, 10, 0, 5, 0).getTime(), now), "12:05am")
-  assert.equal(Model.notificationTime(new Date(2025, 5, 10, 15, 7, 0).getTime(), now), "3:07pm")
-  assert.equal(Model.notificationTime(new Date(2025, 0, 2, 12, 0, 0).getTime(), now), "Jan 2")
-  assert.equal(Model.notificationTime(new Date(2024, 0, 2, 12, 0, 0).getTime(), now), "Jan 2, 2024")
-  assert.equal(Model.notificationTime(0, now), "")
-})
-
-test("notificationMeta includes available time, sender, and optional account", () => {
-  const now = new Date(2025, 5, 10, 15, 0, 0).getTime()
-  const item = {
-    timestampMs: new Date(2025, 5, 10, 14, 30, 0).getTime(),
-    creator: "Ada",
-    accountName: "Work"
+test("notificationText keeps mail text from being read as an option", () => {
+  const command = Model.toastCommand("-r Systems Ltd — --help with the quarterly numbers", "-p please see attached", 0)
+  for (const arg of command) {
+    if (arg.startsWith("-")) assert.ok(["--glyph", "--app-name", "-u", "--exec", "-p", "-r"].includes(arg), `mail text arrived as an option: ${arg}`)
   }
+  assert.ok(command.includes("\u2060-r Systems Ltd — --help with the quarterly numbers"))
+  assert.ok(command.includes("\u2060-p please see attached"))
+  assert.equal(Model.notificationText("Lunch on Thursday?"), "Lunch on Thursday?")
+})
 
-  assert.equal(Model.notificationMeta(item, now, false), "2:30pm • Ada")
-  assert.equal(Model.notificationMeta(item, now, true), "2:30pm • Ada • Work")
-  assert.equal(Model.notificationMeta({ creator: "Ada" }, now, true), "Ada")
-  assert.equal(Model.notificationMeta(null, now, true), "")
+test("replaceableToastId trusts the last id for ten minutes only", () => {
+  const sentAt = 1_000_000
+  assert.equal(Model.replaceableToastId(42, sentAt, sentAt + 60_000), 42)
+  assert.equal(Model.replaceableToastId(42, sentAt, sentAt + Model.toastReplaceWindowMs + 1), 0, "a toast id from before a shell restart may belong to another application")
+  assert.equal(Model.replaceableToastId(0, sentAt, sentAt), 0)
+  assert.equal(Model.replaceableToastId("garbage", sentAt, sentAt), 0)
+})
+
+test("parseScreenerCount reads hey screener list --count", () => {
+  assert.deepEqual(Model.parseScreenerCount('{"ok":true,"data":{"pending_count":3}}'), { ok: true, error: "", count: 3 })
+  assert.equal(Model.parseScreenerCount('{"ok":true,"data":{}}').ok, false)
+  assert.equal(Model.parseScreenerCount('{"ok":false,"error":"boom","code":"api"}').error, "boom")
 })

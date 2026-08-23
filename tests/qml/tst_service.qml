@@ -2,9 +2,10 @@ import QtQuick
 import QtTest
 import Quickshell.Io
 import "../.."
+import "../../Model.js" as Model
 
 TestCase {
-  name: "Service"
+  name: "ServiceSetup"
 
   property var service: null
 
@@ -16,40 +17,93 @@ TestCase {
   function init() {
     service = serviceComponent.createObject(this)
     verify(service !== null)
-    wait(1)
+    service.watchDebounceMs = 0
+    // The refresh timer's start trigger fires on the first turn of the event
+    // loop: let it, so every test begins as the shell does, mid-probe.
+    tick()
+    verify(findProbeProcess().running)
   }
+
+  // Lets zero-length timers — the debounce, the follow-up refresh — fire.
+  function tick() { wait(1) }
+
+  // The refresh timer fires once at creation, so a probe is usually already in
+  // flight; asking again would only queue a follow-up.
+  function beginRefresh() { if (!service.busy) service.refresh() }
 
   function cleanup() {
     service.destroy()
     service = null
   }
 
-  function findProcess(prefix) {
+  function findProbeProcess() {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length < prefix.length) continue
-      var matches = true
-      for (var j = 0; j < prefix.length; j++) {
-        if (String(process.command[j]) !== String(prefix[j])) {
-          matches = false
-          break
-        }
-      }
-      if (matches) return process
+      if (process.command.length > 0 && process.command[0] === "bash") return process
     }
     return null
   }
 
-  function probeProcess() { return findProcess(["bash", "-c"]) }
-  function accountsProcess() { return findProcess(["hey", "accounts", "list"] ) }
-  function screenerProcess() { return findProcess(["bash", "-lc"]) }
-  function notificationProcess() { return findProcess(["hey", "box", "imbox"]) }
-  function readProcess() { return findProcess(["hey", "seen"]) }
+  function findHeyProcess(subcommand) {
+    for (var i = 0; i < ProcessRegistry.processes.length; i++) {
+      var process = ProcessRegistry.processes[i]
+      if (process.command.length > 1 && process.command[0] === "hey" && process.command[1] === subcommand) return process
+    }
+    return null
+  }
 
-  function completeAuthenticatedProbe() {
-    var process = probeProcess()
-    verify(process !== null)
-    process.complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+  // Walks a refresh past the probe and the accounts list so the Imbox read
+  // is the next process to run.
+  function refreshToBox(accountsOK) {
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    var accounts = findHeyProcess("accounts")
+    verify(accounts !== null)
+    if (accountsOK) accounts.complete(0, '{"ok":true,"data":[{"id":"1","name":"Personal"},{"id":"all","name":"All"}]}', "")
+    else accounts.complete(1, "", '{"ok":false,"error":"unknown command \"accounts\" for \"hey\"","code":"usage"}')
+    var box = findHeyProcess("box")
+    verify(box !== null)
+    return box
+  }
+
+  // Walks a refresh all the way through, so the service is idle with the
+  // watch running.
+  function settle() {
+    refreshToBox(true).complete(0, '{"ok":true,"data":{"postings":[]}}', "")
+    findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
+    compare(service.busy, false)
+  }
+
+  // Completes a refresh that is in flight, probe first.
+  function finishRefresh() {
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    findHeyProcess("accounts").complete(0, '{"ok":true,"data":[]}', "")
+    findHeyProcess("box").complete(0, '{"ok":true,"data":{"postings":[]}}', "")
+    findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
+  }
+
+  function findWatchProcess() {
+    for (var i = 0; i < ProcessRegistry.processes.length; i++) {
+      var process = ProcessRegistry.processes[i]
+      if (process.command.length > 0 && process.command[0] === "setpriv") return process
+    }
+    return null
+  }
+
+  function findToastProcess() {
+    for (var i = 0; i < ProcessRegistry.processes.length; i++) {
+      var process = ProcessRegistry.processes[i]
+      if (process.command.length > 0 && process.command[0] === "omarchy-notification-send") return process
+    }
+    return null
+  }
+
+  function findSetupLockProcess() {
+    for (var i = 0; i < ProcessRegistry.processes.length; i++) {
+      var process = ProcessRegistry.processes[i]
+      if (process.command.length > 0 && process.command[0] === "flock") return process
+    }
+    return null
   }
 
   function test_setup_stays_running_until_completion() {
@@ -63,13 +117,14 @@ TestCase {
     service.finishSetup()
     compare(service.setupRunning, false)
     verify(service.tryStartSetup())
+    compare(service.setupRunning, true)
   }
 
   function test_setup_lock_check_recovers_stale_running_state() {
     service.setupRunning = true
     service.checkSetupRunning()
 
-    var process = findProcess(["flock"])
+    var process = findSetupLockProcess()
     verify(process !== null)
     compare(process.command, ["flock", "-n", "/tmp/37signals.hey.setup.lock", "true"])
     verify(!service.tryStartSetup())
@@ -82,189 +137,477 @@ TestCase {
   function test_setup_lock_check_detects_a_running_process() {
     service.checkSetupRunning()
 
-    var process = findProcess(["flock"])
+    var process = findSetupLockProcess()
     verify(process !== null)
     process.complete(1, "", "")
     compare(service.setupRunning, true)
   }
 
-  function test_probe_reports_stderr_from_failed_auth_check() {
-    var process = probeProcess()
-    verify(process !== null)
-    process.complete(17, "", "credential store unavailable; run hey doctor")
+  function test_box_reads_the_imbox_for_every_account() {
+    var box = refreshToBox(true)
+    compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
 
-    compare(service.probeError, true)
-    compare(service.lastError, "credential store unavailable; run hey doctor")
+    box.complete(0, '{"ok":true,"data":{"id":1,"name":"Imbox","postings":[' +
+      '{"id":7,"name":"Lunch on Thursday?","seen":false,"account_id":1,"creator":{"name":"Maria Delgado"}},' +
+      '{"id":8,"name":"Invoice #4021","seen":true,"account_id":1,"creator":{"name":"Northwind Invoicing"}}]}}', "")
     compare(service.refreshing, false)
-  }
-
-  function test_missing_cli_clears_stale_mail_state() {
-    service.notifications = [{ id: "old", unread: true }]
-    service.unreadCount = 1
-    service.screenerCount = 4
-
-    probeProcess().complete(0, "missing\n", "")
-
-    compare(service.probed, true)
-    compare(service.installed, false)
-    compare(service.notifications.length, 0)
-    compare(service.unreadCount, 0)
-    compare(service.screenerCount, 0)
-    compare(service.refreshing, false)
-  }
-
-  function test_signed_out_probe_clears_stale_mail_state() {
-    service.notifications = [{ id: "old", unread: true }]
-    service.unreadCount = 1
-    service.screenerCount = 2
-
-    probeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
-
-    compare(service.installed, true)
-    compare(service.authenticated, false)
-    compare(service.notifications.length, 0)
-    compare(service.unreadCount, 0)
-    compare(service.screenerCount, 0)
-    compare(service.refreshing, false)
-  }
-
-  function test_authenticated_probe_starts_accounts_and_bounded_screener_requests() {
-    completeAuthenticatedProbe()
-
-    compare(service.authenticated, true)
-    verify(accountsProcess().running)
-    verify(screenerProcess().running)
-    verify(String(screenerProcess().command[2]).indexOf("--connect-timeout 5 --max-time 15") !== -1)
-  }
-
-  function test_accounts_success_fetches_every_account() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(0, '{"ok":true,"data":[{"id":"all","name":"All"},{"id":"1","name":"Personal"}]}', "")
-
-    compare(service.accounts, [{ id: "1", name: "Personal", order: 0 }])
-    compare(notificationProcess().command,
-      ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
-    verify(notificationProcess().running)
-  }
-
-  function test_older_cli_falls_back_to_the_merged_imbox() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
-
-    compare(service.accounts, [])
-    compare(notificationProcess().command,
-      ["hey", "box", "imbox", "--limit", "50", "--json"])
-  }
-
-  function test_account_list_failure_stays_visible_and_retryable() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", "credential store unavailable")
-
-    compare(service.lastError, "credential store unavailable")
-    compare(service.refreshing, false)
-    compare(notificationProcess(), null)
-  }
-
-  function test_malformed_account_response_stays_visible_and_retryable() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(0, "not json", "")
-
-    compare(service.lastError, "Could not parse the HEY CLI response")
-    compare(service.refreshing, false)
-    compare(notificationProcess(), null)
-  }
-
-  function test_accounts_auth_error_returns_to_setup() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(1, '{"ok":false,"code":"auth_required","error":"sign in"}', "")
-
-    compare(service.authenticated, false)
-    compare(service.refreshing, false)
-    compare(notificationProcess(), null)
-  }
-
-  function test_notification_success_updates_items_and_unread_count() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
-    notificationProcess().complete(0,
-      '{"ok":true,"data":{"postings":['
-      + '{"id":"seen","name":"Seen","active_at":"2025-02-02T00:00:00Z","seen":true},'
-      + '{"id":"new","name":"New","active_at":"2025-02-01T00:00:00Z","seen":false}'
-      + ']}}', "")
-
     compare(service.notifications.length, 2)
-    compare(service.notifications[0].id, "new")
     compare(service.unreadCount, 1)
-    compare(service.refreshing, false)
-    verify(service.lastUpdated.getTime() > 0)
+    compare(service.notifications[0].accountName, "Personal")
   }
 
-  function test_slow_screener_does_not_block_the_next_mail_refresh() {
-    completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
-    notificationProcess().complete(0, '{"ok":true,"data":{"postings":[]}}', "")
+  function test_box_drops_the_account_filter_for_an_older_cli() {
+    var box = refreshToBox(false)
+    compare(box.command, ["hey", "box", "imbox", "--limit", "50", "--json"])
+  }
 
-    verify(screenerProcess().running)
+  function test_box_takes_the_thread_limit_from_the_settings() {
+    service.settings = { maxNotifications: 20 }
+    var box = refreshToBox(true)
+    compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
+  }
+
+  function test_watch_starts_once_signed_in() {
+    verify(findWatchProcess() === null || !findWatchProcess().running)
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+
+    var watch = findWatchProcess()
+    verify(watch !== null)
+    verify(watch.running)
+    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+    compare(service.watching, true)
+    // Alive is not the same as live: the watch has not said ready.
+    compare(service.connected, false)
+  }
+
+  function test_probe_rejects_a_cli_older_than_the_minimum() {
+    beginRefresh()
+    findProbeProcess().complete(0, 'hey version 0.1.1\n{"ok":true,"data":{"authenticated":true}}', "")
+    compare(service.cliOutdated, true)
+    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    verify(findWatchProcess() === null || !findWatchProcess().running)
+    // The panel still reads on the timer, degraded.
+    verify(findHeyProcess("accounts").running)
+  }
+
+  function test_probe_accepts_a_cli_at_the_minimum() {
+    beginRefresh()
+    findProbeProcess().complete(0, 'hey version 0.2.0\n{"ok":true,"data":{"authenticated":true}}', "")
+    compare(service.cliOutdated, false)
+    compare(service.lastError, "")
+    verify(findWatchProcess().running)
+  }
+
+  function test_an_intentional_stop_is_not_a_watch_failure() {
+    settle()
+    var watch = findWatchProcess()
+    verify(watch.running)
+
+    // Signed out since the last probe: the watch is stopped on purpose.
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
+    verify(!watch.running)
+    compare(service.authenticated, false)
+    compare(service.watchError, "")
+    compare(service.watchRestartScheduled, false)
+    compare(service.lastError, "")
+  }
+
+  function test_auth_lost_during_a_fetch_stops_the_watch() {
+    settle()
+    var watch = findWatchProcess()
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+    compare(service.connected, true)
+
+    var box = refreshToBox(true)
+    box.complete(3, "", '{"ok":false,"error":"not logged in","code":"auth"}')
+    compare(service.authenticated, false)
+    verify(!watch.running)
+    compare(service.connected, false)
+    compare(service.watchError, "")
+  }
+
+  function test_a_failed_mark_seen_re_reads_even_while_live() {
+    settle()
+    service.connected = true
+    service.notifications = [{ id: "7", unread: true }]
+    service.markRead(service.notifications[0])
+    var seen = findHeyProcess("seen")
+    verify(seen !== null)
+    compare(seen.command, ["hey", "seen", "7", "--json"])
+
+    seen.complete(1, "", '{"ok":false,"error":"could not mark as seen","code":"api"}')
+    // The panel marked it seen optimistically and the cable has nothing to
+    // say about a request that failed: the delayed re-read puts it back.
+    compare(service.refreshAfterReadScheduled, true)
+    compare(service.actionStatus, "could not mark as seen")
+    compare(service.actionStatusScheduled, true)
+  }
+
+  function test_marks_queue_one_after_another() {
+    settle()
+    service.notifications = [{ id: "7", unread: true }, { id: "8", unread: true }]
+    service.markRead(service.notifications[0])
+    service.markRead(service.notifications[1])
+    var seen = findHeyProcess("seen")
+    compare(seen.command, ["hey", "seen", "7", "--json"])
+    seen.complete(0, '{"ok":true,"data":{}}', "")
+    // The second mark runs once the first has answered.
+    compare(seen.command, ["hey", "seen", "8", "--json"])
+    verify(seen.running)
+    compare(service.actionStatus, "Marking email as seen…")
+    seen.complete(0, '{"ok":true,"data":{}}', "")
+    compare(service.actionStatus, "Marked as seen")
+    compare(service.actionStatusScheduled, true)
+  }
+
+  function test_a_mark_seen_while_live_leaves_the_re_read_to_the_cable() {
+    settle()
+    service.connected = true
+    service.notifications = [{ id: "7", unread: true }]
+    service.markRead(service.notifications[0])
+    findHeyProcess("seen").complete(0, '{"ok":true,"data":{}}', "")
+    compare(service.refreshAfterReadScheduled, false)
+  }
+
+  function test_watch_does_not_start_while_signed_out() {
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
+    verify(findWatchProcess() === null || !findWatchProcess().running)
+    compare(service.watching, false)
+  }
+
+  function test_ready_makes_the_watch_live_and_reads_the_imbox() {
+    settle()
+    var watch = findWatchProcess()
+
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+    compare(service.connected, true)
+    tick()
+    // The read on ready is the one that closes the startup gap.
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+  }
+
+  function test_disconnected_turns_live_off_without_a_read() {
+    settle()
+    var watch = findWatchProcess()
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:00:00.000Z"}')
+    tick()
+    finishRefresh()
+    compare(service.connected, true)
+
+    watch.emitLine('{"change":"disconnected","at":"2026-08-21T09:05:00.000Z"}')
+    tick()
+    compare(service.connected, false)
+    compare(service.watching, true)
     compare(service.refreshing, false)
-    service.refresh()
-    verify(probeProcess().running)
+
+    // The catch-up after the reconnect says ready again: live, and a read.
+    watch.emitLine('{"change":"ready","at":"2026-08-21T09:06:00.000Z"}')
+    tick()
+    compare(service.connected, true)
     compare(service.refreshing, true)
   }
 
-  function test_screener_failures_clear_stale_counts() {
-    completeAuthenticatedProbe()
-    service.screenerCount = 8
-    screenerProcess().complete(28, "", "request timed out")
-    compare(service.screenerCount, 0)
-    compare(service.lastError, "request timed out")
+  // The lines hey watch writes for new mail: the Imbox's, and The Feed's.
+  readonly property string newLunchLine: '{"change":"added","at":"2026-08-21T09:00:20.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9001,"thread_id":5511,"new":true,"posting":{"id":9001,"name":"Lunch on Thursday?","summary":"Are you free around noon?","creator":{"name":"Maria Delgado"}}}'
+  readonly property string newInvoiceLine: '{"change":"added","at":"2026-08-21T09:00:25.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9002,"thread_id":5512,"new":true,"posting":{"id":9002,"name":"Invoice #4021","creator":{"name":"Northwind Invoicing"}}}'
+  readonly property string newDealsLine: '{"change":"added","at":"2026-08-21T09:00:30.000Z","box":{"id":24089,"kind":"feedbox","name":"The Feed"},"posting_id":9003,"thread_id":5513,"new":true,"posting":{"id":9003,"name":"48 hours only","creator":{"name":"Weekend Deals"}}}'
+  readonly property string readLunchLine: '{"change":"updated","at":"2026-08-21T09:01:00.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9001,"thread_id":5511,"new":false,"posting":{"id":9001,"name":"Lunch on Thursday?","seen":true,"creator":{"name":"Maria Delgado"}}}'
+
+  // Settles with toasts on and the toast debounce, like the read's, at zero.
+  function settleNotifying() {
+    service.settings = { notify: true }
+    service.toastDebounceMs = 0
+    settle()
   }
 
-  function test_malformed_screener_responses_clear_stale_counts() {
-    completeAuthenticatedProbe()
-    service.screenerCount = 8
-    screenerProcess().complete(0, "not json", "")
-    compare(service.screenerCount, 0)
-    compare(service.lastError, "Could not parse the HEY Screener count")
+  function test_a_new_imbox_line_is_a_toast_from_the_plugin() {
+    settleNotifying()
+    var watch = findWatchProcess()
+    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+
+    watch.emitLine(newLunchLine)
+    tick()
+    var toast = findToastProcess()
+    verify(toast !== null)
+    verify(toast.running)
+    compare(toast.command, [
+      "omarchy-notification-send",
+      "--glyph", Model.toastGlyph,
+      "--app-name", "HEY",
+      "-u", "low",
+      "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
+      "Maria Delgado — Lunch on Thursday?",
+      "Are you free around noon?",
+      "-p"
+    ])
+    // The line is a wake-up too, as every line is.
+    compare(service.refreshing, true)
   }
 
-  function test_mark_read_uses_the_notification_account_with_a_current_cli() {
-    service.accounts = [{ id: "account-1", name: "Personal", order: 0 }]
-    var item = { id: "1", accountId: "account-1", unread: true }
-    service.notifications = [item]
-    service.unreadCount = 1
+  function test_two_new_lines_in_the_window_are_one_toast() {
+    settleNotifying()
+    var watch = findWatchProcess()
 
-    service.markRead(item)
-
-    compare(readProcess().command,
-      ["hey", "seen", "1", "--account", "account-1", "--json"])
+    watch.emitLine(newLunchLine)
+    watch.emitLine(newInvoiceLine)
+    tick()
+    var toast = findToastProcess()
+    verify(toast !== null)
+    compare(toast.command.slice(-3), ["2 new in Imbox", "Maria Delgado, Northwind Invoicing", "-p"])
+    toast.complete(0, "42\n", "")
+    compare(service._toastId, 42)
   }
 
-  function test_mark_read_is_optimistic_serial_and_idempotent() {
-    var first = { id: "1", unread: true }
-    var second = { id: "2", unread: true }
-    service.notifications = [first, second]
-    service.unreadCount = 2
+  function test_the_next_burst_replaces_the_toast() {
+    settleNotifying()
+    var watch = findWatchProcess()
 
-    service.markRead(first)
-    compare(service.unreadCount, 1)
-    compare(service.notifications[0].unread, false)
-    compare(readProcess().command, ["hey", "seen", "1", "--json"])
+    watch.emitLine(newLunchLine)
+    tick()
+    var toast = findToastProcess()
+    compare(toast.command.indexOf("-r"), -1)
+    toast.complete(0, "42\n", "")
 
-    service.markRead(first)
-    compare(service.unreadCount, 1)
-    compare(service._readQueue.length, 0)
+    watch.emitLine(newInvoiceLine)
+    tick()
+    compare(toast.command.slice(-4), ["Northwind Invoicing — Invoice #4021", "-p", "-r", "42"])
 
-    service.markRead(second)
-    compare(service.unreadCount, 0)
-    compare(service._readQueue.length, 1)
+    // A send that printed no id leaves the last one in place.
+    toast.complete(1, "", "notify-send: no notification daemon")
+    compare(service._toastId, 42)
+  }
 
-    readProcess().complete(0, '{"ok":true}', "")
-    compare(readProcess().command, ["hey", "seen", "2", "--json"])
-    verify(readProcess().running)
-    compare(service.actionStatus, "Marking email as seen…")
+  function test_new_mail_in_the_feed_does_not_toast() {
+    settleNotifying()
+    findWatchProcess().emitLine(newDealsLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+    // It still wakes the read, like any change.
+    compare(service.refreshing, true)
+  }
 
-    readProcess().complete(4, "", "server unavailable")
-    compare(service.lastError, "server unavailable")
-    compare(service.actionStatus, "server unavailable")
+  function test_a_line_that_is_not_new_does_not_toast() {
+    settleNotifying()
+    findWatchProcess().emitLine(readLunchLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+  }
+
+  function test_notify_off_does_not_toast() {
+    service.toastDebounceMs = 0
+    settle()
+    findWatchProcess().emitLine(newLunchLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+  }
+
+  function test_a_non_boolean_notify_setting_is_off() {
+    service.settings = { notify: "true" }
+    service.toastDebounceMs = 0
+    settle()
+    compare(service.notify, false)
+    findWatchProcess().emitLine(newLunchLine)
+    tick()
+    verify(findToastProcess() === null || !findToastProcess().running)
+  }
+
+  function test_flipping_notify_leaves_the_watch_alone() {
+    settle()
+    var before = findWatchProcess()
+
+    service.settings = { notify: true }
+    verify(before.running)
+    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+    compare(service.watchRestartScheduled, false)
+
+    // Off drops a toast that was about to go out.
+    service.toastDebounceMs = 1000
+    before.emitLine(newLunchLine)
+    compare(service._toastQueue.length, 1)
+    service.settings = { notify: false }
+    compare(service._toastQueue.length, 0)
+    verify(before.running)
+  }
+
+  function test_a_burst_of_watch_events_is_one_debounced_read() {
+    settle()
+    var watch = findWatchProcess()
+
+    watch.emitLine('{"change":"added","at":"2026-08-21T09:00:20.000Z","box":{"id":24088,"kind":"imbox","name":"Imbox"},"posting_id":9001}')
+    watch.emitLine('{"change":"updated","posting_id":9001}')
+    watch.emitLine('{"change":"deleted","posting_id":9002}')
+    compare(service.refreshing, false)
+    tick()
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+    compare(service.refreshPending, false)
+  }
+
+  function test_events_during_a_read_cost_one_follow_up() {
+    settle()
+    var watch = findWatchProcess()
+    watch.emitLine('{"change":"added","posting_id":9001}')
+    tick()
+    compare(service.refreshing, true)
+
+    // The read in flight may predate these: one follow-up, not three.
+    watch.emitLine('{"change":"updated","posting_id":9001}')
+    watch.emitLine('{"change":"updated","posting_id":9003}')
+    watch.emitLine('{"change":"deleted","posting_id":9002}')
+    tick()
+    compare(service.refreshPending, true)
+
+    finishRefresh()
+    compare(service.refreshing, false)
+    tick()
+    compare(service.refreshPending, false)
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+  }
+
+  function test_watch_blank_line_is_not_an_event() {
+    settle()
+    findWatchProcess().emitLine("")
+    tick()
+    compare(service.refreshing, false)
+  }
+
+  function test_watch_auth_exit_asks_to_sign_in_and_waits_for_the_probe() {
+    settle()
+    var watch = findWatchProcess()
+
+    watch.emitLine('{"change":"ready"}')
+    watch.complete(3, "", '{"ok":false,"error":"HEY\'s cable server turned this subscription down — run `hey auth login` again","code":"auth"}')
+    compare(service.authenticated, false)
+    compare(service.connected, false)
+    compare(service.watching, false)
+    compare(service.watchRestartScheduled, false)
+    compare(service.lastError, "")
+
+    // Signed in again: the next probe restarts it.
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    verify(watch.running)
+  }
+
+  function test_watch_other_exit_restarts_on_a_doubling_backoff() {
+    settle()
+    var watch = findWatchProcess()
+
+    watch.complete(6, "", '{"ok":false,"error":"HEY\'s cable server hung up for good — nothing is watching for changes any more","code":"network"}')
+    compare(service.watching, false)
+    compare(service.watchRestartScheduled, true)
+    compare(service.watchRestartMs, 2000)
+    verify(service.watchError.indexOf("hung up") !== -1)
+    // The panel keeps working off the timer; the watch's trouble is not an error.
+    compare(service.lastError, "")
+
+    service.startWatch()
+    verify(watch.running)
+    compare(service.watchError, "")
+    watch.complete(6, "", '{"ok":false,"error":"could not connect","code":"network"}')
+    compare(service.watchRestartMs, 4000)
+  }
+
+  function test_watch_missing_from_the_cli_reports_an_old_cli() {
+    settle()
+    var watch = findWatchProcess()
+
+    watch.complete(1, "", 'Error: unknown command "watch" for "hey"')
+    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.watchRestartScheduled, false)
+  }
+
+  function test_watch_without_the_new_event_reports_an_old_cli() {
+    settle()
+    var watch = findWatchProcess()
+
+    // A CLI with hey watch but no `new` event refuses the command up front,
+    // rather than running a watch that never says which threads are new.
+    watch.complete(2, "", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}')
+    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.watchError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.watchRestartScheduled, false)
+  }
+
+  function test_inactive_service_neither_refreshes_nor_watches() {
+    settle()
+    var watch = findWatchProcess()
+
+    service.active = false
+    verify(!watch.running)
+    service.refresh()
+    compare(service.refreshing, false)
+    verify(!findProbeProcess().running)
+  }
+
+  function test_box_auth_error_on_stderr_asks_to_sign_in() {
+    var box = refreshToBox(true)
+    box.complete(3, "", '{"ok":false,"error":"not logged in — run `hey auth login` first","code":"auth","hint":"Run: hey auth login"}')
+    compare(service.authenticated, false)
+    compare(service.refreshing, false)
+    compare(service.lastError, "")
+  }
+
+  function test_accounts_auth_error_on_stderr_asks_to_sign_in() {
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    findHeyProcess("accounts").complete(3, "", '{"ok":false,"error":"not logged in","code":"auth"}')
+    compare(service.authenticated, false)
+    compare(service.refreshing, false)
+  }
+
+  function test_box_reports_an_old_cli() {
+    var box = refreshToBox(true)
+    box.complete(1, "", '{"ok":false,"error":"unknown flag: --account","code":"usage"}')
+    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.refreshing, false)
+  }
+
+  function test_box_surfaces_the_cli_error_message() {
+    var box = refreshToBox(true)
+    box.complete(6, "", '{"ok":false,"error":"network error: dial tcp: connection refused","code":"network"}')
+    compare(service.lastError, "network error: dial tcp: connection refused")
+  }
+
+  function test_screener_count_comes_from_the_cli() {
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    var screener = findHeyProcess("screener")
+    verify(screener !== null)
+    compare(screener.command, ["hey", "screener", "list", "--count", "--json"])
+    screener.complete(0, '{"ok":true,"data":{"pending_count":3}}', "")
+    compare(service.screenerCount, 3)
+  }
+
+  function test_refresh_during_a_fetch_is_coalesced_not_dropped() {
+    var box = refreshToBox(true)
+    service.refresh()
+    service.refresh()
+    compare(service.refreshPending, true)
+
+    box.complete(0, '{"ok":true,"data":{"postings":[]}}', "")
+    // The Screener count is still in flight: the pending refresh waits.
+    compare(service.refreshPending, true)
+    compare(service.refreshing, false)
+    findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
+    // Everything settled: the pending refresh starts a new probe, once, on
+    // the next turn of the event loop.
+    compare(service.refreshPending, false)
+    tick()
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+  }
+
+  function test_screener_count_may_be_a_bare_number() {
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    findHeyProcess("screener").complete(0, "3\n", "")
+    compare(service.screenerCount, 3)
+    compare(service.lastError, "")
   }
 }
