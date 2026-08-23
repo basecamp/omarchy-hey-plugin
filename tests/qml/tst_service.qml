@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import Quickshell
 import Quickshell.Io
 import "../.."
 import "../../Model.js" as Model
@@ -15,6 +16,7 @@ TestCase {
   }
 
   function init() {
+    Quickshell.resetDetachedCommands()
     service = serviceComponent.createObject(this)
     verify(service !== null)
     service.watchDebounceMs = 0
@@ -161,10 +163,10 @@ TestCase {
     compare(box.command, ["hey", "box", "imbox", "--limit", "50", "--json"])
   }
 
-  function test_box_takes_the_thread_limit_from_the_settings() {
+  function test_box_keeps_a_bounded_thread_limit() {
     service.settings = { maxNotifications: 20 }
     var box = refreshToBox(true)
-    compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
+    compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
   }
 
   function test_watch_starts_once_signed_in() {
@@ -183,9 +185,9 @@ TestCase {
 
   function test_probe_rejects_a_cli_older_than_the_minimum() {
     beginRefresh()
-    findProbeProcess().complete(0, 'hey version 0.1.1\n{"ok":true,"data":{"authenticated":true}}', "")
+    findProbeProcess().complete(0, 'hey version 0.2.0\n{"ok":true,"data":{"authenticated":true}}', "")
     compare(service.cliOutdated, true)
-    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.1 or newer is required (omarchy pkg aur add hey-cli)")
     verify(findWatchProcess() === null || !findWatchProcess().running)
     // The panel still reads on the timer, degraded.
     verify(findHeyProcess("accounts").running)
@@ -193,7 +195,7 @@ TestCase {
 
   function test_probe_accepts_a_cli_at_the_minimum() {
     beginRefresh()
-    findProbeProcess().complete(0, 'hey version 0.2.0\n{"ok":true,"data":{"authenticated":true}}', "")
+    findProbeProcess().complete(0, 'hey version 0.2.1\n{"ok":true,"data":{"authenticated":true}}', "")
     compare(service.cliOutdated, false)
     compare(service.lastError, "")
     verify(findWatchProcess().running)
@@ -338,7 +340,7 @@ TestCase {
       "omarchy-notification-send",
       "--app-name", "HEY",
       "-u", "low",
-      "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
+      "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui --instance omarchy",
       "HEY\nLunch on Thursday?",
       "Are you free around noon?",
       "-i", Model.toastIcon,
@@ -413,6 +415,76 @@ TestCase {
     findWatchProcess().emitLine(newLunchLine)
     tick()
     verify(findToastProcess() === null || !findToastProcess().running)
+  }
+
+  function test_refresh_interval_stays_at_ten_minutes() {
+    service.settings = { refreshIntervalSec: 60 }
+    compare(service.refreshIntervalSec, 600)
+  }
+
+  function test_open_action_accepts_known_settings_only() {
+    compare(service.openAction, "tui")
+
+    service.settings = { openAction: "browser" }
+    compare(service.openAction, "browser")
+
+    service.settings = { openAction: "app" }
+    compare(service.openAction, "app")
+
+    service.settings = { openAction: "unexpected" }
+    compare(service.openAction, "tui")
+  }
+
+  function test_open_action_preserves_a_shared_existing_destination() {
+    service.settings = { toastClickAction: "browser", emailClickAction: "browser" }
+    compare(service.openAction, "browser")
+
+    service.settings = { toastClickAction: "browser", emailClickAction: "tui" }
+    compare(service.openAction, "tui")
+  }
+
+  function test_email_click_can_open_its_topic_in_the_tui() {
+    service.settings = { openAction: "tui" }
+    service.openNotification({ id: "7", accountId: "42", title: "Lunch on Thursday?", url: "https://app.hey.com/topics/5511", unread: false })
+
+    compare(Quickshell.detachedCommands.length, 2)
+    compare(Quickshell.detachedCommands[0],
+      ["hey", "--account", "42", "tui", "--instance", "omarchy", "--topic", "5511", "--topic-title", "Lunch on Thursday?", "--remote"])
+    compare(Quickshell.detachedCommands[1],
+      ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey", "--account", "42", "tui", "--instance", "omarchy", "--topic", "5511"])
+  }
+
+  function test_email_click_can_open_its_topic_in_the_hey_app() {
+    service.settings = { openAction: "app" }
+    service.openNotification({ id: "7", accountId: "42", title: "Lunch on Thursday?", url: "https://app.hey.com/topics/5511", unread: false })
+
+    compare(Quickshell.detachedCommands.length, 1)
+    compare(Quickshell.detachedCommands[0],
+      ["omarchy-launch-webapp", "https://app.hey.com/topics/5511"])
+  }
+
+  function test_tui_notification_click_opens_the_message_topic() {
+    service.settings = { notify: true, openAction: "tui" }
+    service.toastDebounceMs = 0
+    settle()
+    findWatchProcess().emitLine('{"change":"added","box":{"kind":"imbox","name":"Imbox"},"new":true,"posting":{"id":9001,"account_id":42,"name":"Lunch on Thursday?","app_url":"https://app.hey.com/topics/5511"}}')
+    tick()
+
+    var toast = findToastProcess()
+    verify(toast !== null)
+    compare(toast.command[6], Model.tuiOpenCommand(5511, 42, "Lunch on Thursday?"))
+  }
+
+  function test_browser_notification_click_opens_the_message_url() {
+    service.settings = { notify: true, openAction: "browser" }
+    service.toastDebounceMs = 0
+    settle()
+    findWatchProcess().emitLine('{"change":"added","box":{"kind":"imbox","name":"Imbox"},"new":true,"posting":{"id":9001,"name":"Lunch on Thursday?","app_url":"https://app.hey.com/topics/5511"}}')
+    tick()
+
+    var toast = findToastProcess()
+    verify(toast !== null)
+    compare(toast.command[6], "xdg-open 'https://app.hey.com/topics/5511'")
   }
 
   function test_flipping_notify_leaves_the_watch_alone() {
@@ -518,7 +590,7 @@ TestCase {
     var watch = findWatchProcess()
 
     watch.complete(1, "", 'Error: unknown command "watch" for "hey"')
-    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.1 or newer is required (omarchy pkg aur add hey-cli)")
     compare(service.watchRestartScheduled, false)
   }
 
@@ -529,8 +601,8 @@ TestCase {
     // A CLI with hey watch but no `new` event refuses the command up front,
     // rather than running a watch that never says which threads are new.
     watch.complete(2, "", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}')
-    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
-    compare(service.watchError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.1 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.watchError, "HEY CLI 0.2.1 or newer is required (omarchy pkg aur add hey-cli)")
     compare(service.watchRestartScheduled, false)
   }
 
@@ -564,7 +636,7 @@ TestCase {
   function test_box_reports_an_old_cli() {
     var box = refreshToBox(true)
     box.complete(1, "", '{"ok":false,"error":"unknown flag: --account","code":"usage"}')
-    compare(service.lastError, "HEY CLI 0.2.0 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.1 or newer is required (omarchy pkg aur add hey-cli)")
     compare(service.refreshing, false)
   }
 
