@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "37signals.hey",
   "name": "HEY",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "37signals",
   "license": "MIT",
   "description": "Unread email from HEY through the HEY CLI.",
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "HEY",
-    "description": "Unread count and recent email from the HEY Imbox.",
+    "description": "Unread count and recent email from the HEY Imbox across linked accounts.",
     "category": "Communication",
     "aliases": [
       "hey",
