@@ -180,11 +180,11 @@ function watchLine(line) {
 // to do about it is the plugin's: the Imbox only, since HEY's attention model
 // puts new mail in one place, one toast per burst, replaced rather than
 // stacked, under the app-name HEY so Omarchy's notification silencing applies
-// (its own `omarchy-action` pops through DND on purpose), with the bar's
-// envelope as the glyph and a click that focuses the TUI. The exec runs on the
-// shell's side, so it survives shell restarts.
+// (its own `omarchy-action` pops through DND on purpose), with the HEY app icon
+// and a click that focuses the TUI. The exec runs on the shell's side, so it
+// survives shell restarts.
 var toastAppName = "HEY"
-var toastGlyph = ""  // nf-fa-envelope, the bar's own
+var toastIcon = "hey"
 var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui"
 // Notification ids are daemon-local, not stable identities: after a shell
 // restart the same number may belong to another application's notification,
@@ -251,14 +251,13 @@ function replaceableToastId(id, atMs, nowMs) {
 function toastCommand(headline, description, replaceId) {
   var command = [
     "omarchy-notification-send",
-    "--glyph", toastGlyph,
     "--app-name", toastAppName,
     "-u", "low",
     "--exec", toastFocusCommand,
     notificationText(headline)
   ]
   if (String(description || "") !== "") command.push(notificationText(description))
-  command.push("-p")
+  command.push("-i", toastIcon, "-p")
   var id = Number(replaceId || 0)
   if (isFinite(id) && id > 0) command.push("-r", String(id))
   return command
@@ -532,7 +531,7 @@ if (typeof module !== "undefined") {
     replaceableToastId: replaceableToastId,
     toastCommand: toastCommand,
     toastAppName: toastAppName,
-    toastGlyph: toastGlyph,
+    toastIcon: toastIcon,
     toastFocusCommand: toastFocusCommand,
     toastReplaceWindowMs: toastReplaceWindowMs,
     parseScreenerCount: parseScreenerCount,

@@ -144,26 +144,26 @@ test("composeMailToast counts a burst and lists the first senders", () => {
   assert.equal(toast.description, "Maria (personal), Northwind Invoicing, Sam Whitfield, …")
 })
 
-test("toastCommand goes out as HEY with the glyph, the focus exec and -p, replacing a recent toast", () => {
+test("toastCommand goes out as HEY with its app icon, focus exec and printed id", () => {
   const first = Model.toastCommand("Maria Delgado — Lunch on Thursday?", "Are you free around noon?", 0)
   assert.deepEqual(first, [
     "omarchy-notification-send",
-    "--glyph", Model.toastGlyph,
     "--app-name", "HEY",
     "-u", "low",
     "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
     "Maria Delgado — Lunch on Thursday?",
     "Are you free around noon?",
+    "-i", Model.toastIcon,
     "-p"
   ])
   const second = Model.toastCommand("2 new in Imbox", "", 42)
-  assert.deepEqual(second.slice(-4), ["2 new in Imbox", "-p", "-r", "42"])
+  assert.deepEqual(second.slice(-6), ["2 new in Imbox", "-i", "hey", "-p", "-r", "42"])
 })
 
 test("notificationText keeps mail text from being read as an option", () => {
   const command = Model.toastCommand("-r Systems Ltd — --help with the quarterly numbers", "-p please see attached", 0)
   for (const arg of command) {
-    if (arg.startsWith("-")) assert.ok(["--glyph", "--app-name", "-u", "--exec", "-p", "-r"].includes(arg), `mail text arrived as an option: ${arg}`)
+    if (arg.startsWith("-")) assert.ok(["--app-name", "-u", "--exec", "-i", "-p", "-r"].includes(arg), `mail text arrived as an option: ${arg}`)
   }
   assert.ok(command.includes("\u2060-r Systems Ltd — --help with the quarterly numbers"))
   assert.ok(command.includes("\u2060-p please see attached"))

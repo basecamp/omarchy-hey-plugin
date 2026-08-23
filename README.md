@@ -94,7 +94,7 @@ hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
 hey seen <posting-id> [--account <id>] --json
 flock -n $XDG_RUNTIME_DIR/37signals.hey.setup.lock true
-omarchy-notification-send --glyph <glyph> --app-name HEY -u low --exec "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui" <headline> [description] -p [-r <id>]
+omarchy-notification-send --app-name HEY -u low --exec "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui" <headline> [description] -i hey -p [-r <id>]
 ```
 
 `hey watch` is run under `setpriv --pdeathsig TERM`, so it ends with the shell that started it. Email data is held in the Quickshell process memory. The plugin does not write email content, credentials, or tokens to disk, and never handles a token at all; the watch keeps no state file either.
