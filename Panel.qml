@@ -481,8 +481,9 @@ Panel {
             Text {
               id: notifyBell
               anchors.right: notifySwitch.left
-              anchors.rightMargin: Style.space(7)
+              anchors.rightMargin: Style.space(3)
               anchors.verticalCenter: parent.verticalCenter
+              anchors.verticalCenterOffset: 2
               visible: !root.needsSetup
               text: service.notify ? "󰂚" : "󰂛"
               color: service.notify ? root.dim : root.urgent
