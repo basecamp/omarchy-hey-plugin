@@ -47,7 +47,7 @@ function parseJson(raw) {
 
   try {
     var parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== "object") return { ok: false, error: "The HEY CLI returned invalid data", code: "" }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "The HEY CLI returned invalid data", code: "" }
     if (parsed.ok === false) {
       return {
         ok: false,

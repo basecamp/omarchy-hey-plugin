@@ -31,6 +31,7 @@ Item {
   readonly property int accountCount: accounts.length
 
   property string _probeOutput: ""
+  property string _probeErrorOutput: ""
   property string _accountsOutput: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
@@ -77,40 +78,55 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running) return
+    if (refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running) return
     refreshing = true
     lastError = ""
     // Probe on every refresh: a bare `hey` process would never emit
     // `exited` if the binary vanished since the last check, sticking
     // `refreshing` forever. The probe's bash wrapper always exits.
     _probeOutput = ""
+    _probeErrorOutput = ""
     probeProcess.running = true
   }
 
-  function finishProbe(stdout) {
+  function finishProbe(exitCode, stdout, stderr) {
     probed = true
     probeError = false
     var text = String(stdout || "")
+    var errorText = String(stderr || "")
     if (text.trim() === "missing") {
       installed = false
+      authenticated = true
+      notifications = []
+      unreadCount = 0
+      screenerCount = 0
       refreshing = false
       return
     }
     installed = true
 
-    // Only a well-formed `auth status` success is authoritative for the
-    // authenticated flag. Errors and garbage get the error line instead —
-    // telling the user to log in can't fix those.
+    if (exitCode !== 0) {
+      authenticated = true
+      probeError = true
+      lastError = conciseError(errorText || text, "Could not check the HEY CLI")
+      refreshing = false
+      return
+    }
+
+    // A successful, well-formed auth response determines the setup state.
     var result = Model.parseJson(text)
     if (!result.ok || !result.value.data) {
       authenticated = true
       probeError = true
-      lastError = conciseError("Could not check the HEY CLI: " + (result.error || "unexpected response"))
+      lastError = conciseError(errorText || ("Could not check the HEY CLI: " + (result.error || "unexpected response")))
       refreshing = false
       return
     }
     authenticated = result.value.data.authenticated === true
     if (!authenticated) {
+      notifications = []
+      unreadCount = 0
+      screenerCount = 0
       refreshing = false
       return
     }
@@ -150,28 +166,39 @@ Item {
 
   function markRead(item) {
     if (!item || !item.unread) return
-    setReadOptimistically(item)
+    var current = null
+    for (var i = 0; i < notifications.length; i++) {
+      if (String(notifications[i].id) === String(item.id) && notifications[i].unread) {
+        current = notifications[i]
+        break
+      }
+    }
+    if (!current) return
+
+    setReadOptimistically(current)
     var queue = _readQueue.slice()
-    queue.push(item)
+    queue.push(current)
     _readQueue = queue
     runNextRead()
   }
 
   function setReadOptimistically(item) {
     var changed = []
+    var marked = false
     for (var i = 0; i < notifications.length; i++) {
       var existing = notifications[i]
-      if (existing.id === item.id) {
+      if (String(existing.id) === String(item.id) && existing.unread) {
         var replacement = {}
         for (var key in existing) replacement[key] = existing[key]
         replacement.unread = false
         changed.push(replacement)
+        marked = true
       } else {
         changed.push(existing)
       }
     }
     notifications = changed
-    unreadCount = Math.max(0, unreadCount - 1)
+    if (marked) unreadCount = Math.max(0, unreadCount - 1)
   }
 
   function runNextRead() {
@@ -223,8 +250,16 @@ Item {
       waitForEnd: true
       onStreamFinished: root._probeOutput = text
     }
+    stderr: StdioCollector {
+      id: probeStderr
+      waitForEnd: true
+      onStreamFinished: root._probeErrorOutput = text
+    }
     onExited: function(exitCode) {
-      root.finishProbe(String(probeStdout.text || root._probeOutput || ""))
+      root.finishProbe(
+        exitCode,
+        String(probeStdout.text || root._probeOutput || ""),
+        String(probeStderr.text || root._probeErrorOutput || ""))
     }
   }
 
@@ -295,7 +330,7 @@ Item {
     running: false
     command: [
       "bash", "-lc",
-      "token=$(hey auth token --quiet) && curl -fsS -H \"Authorization: Bearer $token\" -H \"Accept: application/json\" https://app.hey.com/clearances.json"
+      "token=$(hey auth token --quiet) && curl -fsS --connect-timeout 5 --max-time 15 -H \"Authorization: Bearer $token\" -H \"Accept: application/json\" https://app.hey.com/clearances.json"
     ]
     stdout: StdioCollector {
       id: screenerStdout
@@ -311,6 +346,7 @@ Item {
       var stdout = String(screenerStdout.text || root._screenerOutput || "")
       var stderr = String(screenerStderr.text || root._screenerError || "")
       if (exitCode !== 0) {
+        root.screenerCount = 0
         root.lastError = root.conciseError(stderr || stdout, "Could not load the HEY Screener count")
         return
       }
@@ -320,6 +356,7 @@ Item {
         var count = parseInt(String(parsed.pending_clearances_count || 0), 10)
         root.screenerCount = isFinite(count) ? Math.max(0, count) : 0
       } catch (error) {
+        root.screenerCount = 0
         root.lastError = "Could not parse the HEY Screener count"
       }
     }
@@ -359,10 +396,10 @@ Item {
       } else {
         root.actionStatus = "Marked as seen"
       }
-      root.actionStatusTimer.restart()
+      actionStatusTimer.restart()
       root._readingNotification = null
       if (root._readQueue.length > 0) root.runNextRead()
-      else root.refreshAfterRead.restart()
+      else refreshAfterRead.restart()
     }
   }
 }
