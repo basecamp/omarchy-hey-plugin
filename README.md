@@ -77,8 +77,8 @@ Off by default. The switch in the panel header turns new-mail toasts on; so do `
 
 Every `added` and `updated` line `hey watch` writes says whether the thread is new mail — unseen, unmuted, and active since the watch last saw it, or since the watch began for a thread it has not seen, so a box's backlog is never new and neither is reading, muting or moving a thread, while a reply on a known thread is. That is the CLI's call, made once on HEY's own clock. The plugin reads those lines for the Imbox — the watch follows every box, but only Imbox mail asks for attention — and sends the toast itself through `omarchy-notification-send`:
 
-- At most one toast per burst of changes — `Sender — Subject` for one new thread, `N new in Imbox` with the first few senders for more. A burst that lands while the previous toast is still on screen replaces it rather than stacking (the daemon's printed id is passed back as `-r`; it is trusted for ten minutes at most, since ids are daemon-local); once a toast has expired, the next burst is a fresh one — a replaced id the daemon no longer tracks is a new notification by the freedesktop rules.
-- The toast identifies as HEY, so SUPER+CTRL+comma (Omarchy's notification silencing) mutes it like any other app. Clicking it focuses `hey tui`.
+- At most one toast appears per burst of changes. One new thread shows `HEY`, its subject, and a truncated first content line. A group shows `HEY`, `N new in Imbox`, and the first few senders. A burst that lands while the previous toast is still on screen replaces it rather than stacking (the daemon's printed id is passed back as `-r`; it is trusted for ten minutes at most, since ids are daemon-local); once a toast has expired, the next burst is a fresh one — a replaced id the daemon no longer tracks is a new notification by the freedesktop rules.
+- The toast identifies as HEY and displays its app icon, so SUPER+CTRL+comma (Omarchy's notification silencing) mutes it like any other app. Clicking it focuses `hey tui`.
 - One watch per shell means one toast per burst, however many monitors. Nothing is written to disk.
 
 ## Privacy and security
@@ -94,7 +94,7 @@ hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
 hey seen <posting-id> [--account <id>] --json
 flock -n $XDG_RUNTIME_DIR/37signals.hey.setup.lock true
-omarchy-notification-send --glyph <glyph> --app-name HEY -u low --exec "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui" <headline> [description] -p [-r <id>]
+omarchy-notification-send --app-name HEY -u low --exec "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui" <headline> [description] -i hey -p [-r <id>]
 ```
 
 `hey watch` is run under `setpriv --pdeathsig TERM`, so it ends with the shell that started it. Email data is held in the Quickshell process memory. The plugin does not write email content, credentials, or tokens to disk, and never handles a token at all; the watch keeps no state file either.

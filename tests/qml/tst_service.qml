@@ -336,12 +336,12 @@ TestCase {
     verify(toast.running)
     compare(toast.command, [
       "omarchy-notification-send",
-      "--glyph", Model.toastGlyph,
       "--app-name", "HEY",
       "-u", "low",
       "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
-      "Maria Delgado — Lunch on Thursday?",
+      "HEY\nLunch on Thursday?",
       "Are you free around noon?",
+      "-i", Model.toastIcon,
       "-p"
     ])
     // The line is a wake-up too, as every line is.
@@ -357,7 +357,7 @@ TestCase {
     tick()
     var toast = findToastProcess()
     verify(toast !== null)
-    compare(toast.command.slice(-3), ["2 new in Imbox", "Maria Delgado, Northwind Invoicing", "-p"])
+    compare(toast.command.slice(-5), ["HEY\n2 new in Imbox", "Maria Delgado, Northwind Invoicing", "-i", "hey", "-p"])
     toast.complete(0, "42\n", "")
     compare(service._toastId, 42)
   }
@@ -374,7 +374,7 @@ TestCase {
 
     watch.emitLine(newInvoiceLine)
     tick()
-    compare(toast.command.slice(-4), ["Northwind Invoicing — Invoice #4021", "-p", "-r", "42"])
+    compare(toast.command.slice(-6), ["HEY\nInvoice #4021", "-i", "hey", "-p", "-r", "42"])
 
     // A send that printed no id leaves the last one in place.
     toast.complete(1, "", "notify-send: no notification daemon")
