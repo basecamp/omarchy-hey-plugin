@@ -117,11 +117,11 @@ test("watchLine reads a hey watch line: the change, the box, and whether it is n
   assert.equal(Model.newImboxMail(null), false)
 })
 
-test("composeMailToast headlines one thread as Sender — Subject", () => {
+test("composeMailToast puts HEY and the subject on separate headline lines", () => {
   const toast = Model.composeMailToast("Imbox", [
     { id: 9001, name: "Lunch on Thursday?", summary: "Are you free around noon?", creator: { name: "Maria Delgado" } }
   ])
-  assert.equal(toast.headline, "Maria Delgado — Lunch on Thursday?")
+  assert.equal(toast.headline, "HEY\nLunch on Thursday?")
   assert.equal(toast.description, "Are you free around noon?")
 })
 
@@ -129,8 +129,14 @@ test("composeMailToast drops a description that already stood in for the subject
   const toast = Model.composeMailToast("Imbox", [
     { id: 9001, summary: "Your August invoice is attached.", creator: { email_address: "billing@example.com" } }
   ])
-  assert.equal(toast.headline, "billing@example.com — Your August invoice is attached.")
+  assert.equal(toast.headline, "HEY\nYour August invoice is attached.")
   assert.equal(toast.description, "")
+})
+
+test("notificationPreview uses the first content line and truncates long bodies", () => {
+  assert.equal(Model.notificationPreview("First line<br>Second line"), "First line")
+  assert.equal(Model.notificationPreview("\\n\\nUseful line\\nIgnored line"), "Useful line")
+  assert.equal(Model.notificationPreview("A message that keeps going", 10), "A message…")
 })
 
 test("composeMailToast counts a burst and lists the first senders", () => {
@@ -140,24 +146,24 @@ test("composeMailToast counts a burst and lists the first senders", () => {
     { id: 9003, name: "Draft agenda for Monday", creator: { name: "Sam Whitfield" } },
     { id: 9004, name: "Photos from the offsite", creator: { name: "Priya Raman" } }
   ])
-  assert.equal(toast.headline, "4 new in Imbox")
+  assert.equal(toast.headline, "HEY\n4 new in Imbox")
   assert.equal(toast.description, "Maria (personal), Northwind Invoicing, Sam Whitfield, …")
 })
 
 test("toastCommand goes out as HEY with its app icon, focus exec and printed id", () => {
-  const first = Model.toastCommand("Maria Delgado — Lunch on Thursday?", "Are you free around noon?", 0)
+  const first = Model.toastCommand("HEY\nLunch on Thursday?", "Are you free around noon?", 0)
   assert.deepEqual(first, [
     "omarchy-notification-send",
     "--app-name", "HEY",
     "-u", "low",
     "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
-    "Maria Delgado — Lunch on Thursday?",
+    "HEY\nLunch on Thursday?",
     "Are you free around noon?",
     "-i", Model.toastIcon,
     "-p"
   ])
-  const second = Model.toastCommand("2 new in Imbox", "", 42)
-  assert.deepEqual(second.slice(-6), ["2 new in Imbox", "-i", "hey", "-p", "-r", "42"])
+  const second = Model.toastCommand("HEY\n2 new in Imbox", "", 42)
+  assert.deepEqual(second.slice(-6), ["HEY\n2 new in Imbox", "-i", "hey", "-p", "-r", "42"])
 })
 
 test("notificationText keeps mail text from being read as an option", () => {

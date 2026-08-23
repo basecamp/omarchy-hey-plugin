@@ -185,6 +185,7 @@ function watchLine(line) {
 // survives shell restarts.
 var toastAppName = "HEY"
 var toastIcon = "hey"
+var toastPreviewLimit = 96
 var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui"
 // Notification ids are daemon-local, not stable identities: after a shell
 // restart the same number may belong to another application's notification,
@@ -205,16 +206,34 @@ function postingSubject(posting) {
   return cleanText(posting.name || posting.summary || "")
 }
 
-// composeMailToast turns one burst of new postings into a headline and a
-// description: `Sender — Subject` for a single thread, a count with the first
-// few senders for more.
+// notificationPreview provides one concise body line. HTML breaks and escaped
+// newlines establish the first line, and long previews end with an ellipsis.
+function notificationPreview(value, limit) {
+  var lines = String(value || "")
+    .replace(/\\[nr]/g, "\n")
+    .replace(/<br\s*\/?\s*>|<\/p\s*>/gi, "\n")
+    .split(/\r?\n/)
+  var preview = ""
+  for (var i = 0; i < lines.length; i++) {
+    preview = cleanText(lines[i])
+    if (preview !== "") break
+  }
+  var maximum = positiveInteger(limit, toastPreviewLimit)
+  if (preview.length <= maximum) return preview
+  return preview.substring(0, maximum - 1).trim() + "…"
+}
+
+// composeMailToast gives each popup three content lines: HEY, the subject, and
+// the first concise line of the message. A burst uses its count as the subject
+// and the first senders as its description.
 function composeMailToast(boxName, postings) {
   var fresh = Array.isArray(postings) ? postings : []
   if (fresh.length === 1) {
     var posting = fresh[0]
-    var description = cleanText(posting.summary || "")
-    if (description === postingSubject(posting)) description = ""  // the summary already stood in for a missing subject
-    return { headline: postingSender(posting) + " — " + postingSubject(posting), description: description }
+    var subject = postingSubject(posting)
+    var description = notificationPreview(posting.summary || "")
+    if (description === subject) description = ""  // the summary already stood in for a missing subject
+    return { headline: toastAppName + "\n" + subject, description: description }
   }
 
   var senders = []
@@ -225,7 +244,10 @@ function composeMailToast(boxName, postings) {
     }
     senders.push(postingSender(fresh[i]))
   }
-  return { headline: fresh.length + " new in " + (cleanText(boxName) || "Imbox"), description: senders.join(", ") }
+  return {
+    headline: toastAppName + "\n" + fresh.length + " new in " + (cleanText(boxName) || "Imbox"),
+    description: notificationPreview(senders.join(", "))
+  }
 }
 
 // notificationText keeps mail-derived text from being read as an option:
@@ -527,11 +549,13 @@ if (typeof module !== "undefined") {
     watchLine: watchLine,
     newImboxMail: newImboxMail,
     composeMailToast: composeMailToast,
+    notificationPreview: notificationPreview,
     notificationText: notificationText,
     replaceableToastId: replaceableToastId,
     toastCommand: toastCommand,
     toastAppName: toastAppName,
     toastIcon: toastIcon,
+    toastPreviewLimit: toastPreviewLimit,
     toastFocusCommand: toastFocusCommand,
     toastReplaceWindowMs: toastReplaceWindowMs,
     parseScreenerCount: parseScreenerCount,
