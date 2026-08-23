@@ -92,7 +92,7 @@ hey accounts list --json
 hey box imbox --account all --limit <count> --json
 hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
-hey seen <posting-id> --json
+hey seen <posting-id> [--account <id>] --json
 flock -n $XDG_RUNTIME_DIR/37signals.hey.setup.lock true
 omarchy-notification-send --glyph <glyph> --app-name HEY -u low --exec "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui" <headline> [description] -p [-r <id>]
 ```

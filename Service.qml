@@ -85,6 +85,7 @@ Item {
   property string _toastOutput: ""
 
   property string _probeOutput: ""
+  property string _probeErrorOutput: ""
   property string _accountsOutput: ""
   property string _accountsError: ""
   property string _notificationsOutput: ""
@@ -143,15 +144,21 @@ Item {
     // `exited` if the binary vanished since the last check, sticking
     // `refreshing` forever. The probe's bash wrapper always exits.
     _probeOutput = ""
+    _probeErrorOutput = ""
     probeProcess.running = true
   }
 
-  function finishProbe(stdout) {
+  function finishProbe(exitCode, stdout, stderr) {
     probed = true
     probeError = false
     var text = String(stdout || "")
+    var errorText = String(stderr || "")
     if (text.trim() === "missing") {
       installed = false
+      authenticated = true
+      notifications = []
+      unreadCount = 0
+      screenerCount = 0
       refreshing = false
       stopWatch()
       return
@@ -172,7 +179,7 @@ Item {
     if (!result.ok || !result.value.data) {
       authenticated = true
       probeError = true
-      lastError = conciseError("Could not check the HEY CLI: " + (result.error || "unexpected response"))
+      lastError = conciseError(errorText || ("Could not check the HEY CLI: " + (result.error || "unexpected response")))
       refreshing = false
       return
     }
@@ -193,6 +200,12 @@ Item {
     screenerProcess.running = true
   }
 
+  function accountsCommandUnavailable(stdout, stderr) {
+    var text = (String(stdout || "") + " " + String(stderr || "")).toLowerCase()
+    return text.indexOf("unknown command \"accounts\"") !== -1
+      || text.indexOf("unknown command 'accounts'") !== -1
+  }
+
   function fetchNotifications(withAccountFilter) {
     _notificationsOutput = ""
     _notificationsError = ""
@@ -204,6 +217,9 @@ Item {
   // and nothing to watch with — the watch would only exit the same way.
   function signedOut() {
     authenticated = false
+    notifications = []
+    unreadCount = 0
+    screenerCount = 0
     refreshing = false
     stopWatch()
   }
@@ -338,28 +354,39 @@ Item {
 
   function markRead(item) {
     if (!item || !item.unread) return
-    setReadOptimistically(item)
+    var current = null
+    for (var i = 0; i < notifications.length; i++) {
+      if (String(notifications[i].id) === String(item.id) && notifications[i].unread) {
+        current = notifications[i]
+        break
+      }
+    }
+    if (!current) return
+
+    setReadOptimistically(current)
     var queue = _readQueue.slice()
-    queue.push(item)
+    queue.push(current)
     _readQueue = queue
     runNextRead()
   }
 
   function setReadOptimistically(item) {
     var changed = []
+    var marked = false
     for (var i = 0; i < notifications.length; i++) {
       var existing = notifications[i]
-      if (existing.id === item.id) {
+      if (String(existing.id) === String(item.id) && existing.unread) {
         var replacement = {}
         for (var key in existing) replacement[key] = existing[key]
         replacement.unread = false
         changed.push(replacement)
+        marked = true
       } else {
         changed.push(existing)
       }
     }
     notifications = changed
-    unreadCount = Math.max(0, unreadCount - 1)
+    if (marked) unreadCount = Math.max(0, unreadCount - 1)
   }
 
   function runNextRead() {
@@ -371,9 +398,12 @@ Item {
     _readError = ""
     actionStatusTimer.stop()
     actionStatus = "Marking email as seen…"
-    readProcess.command = [
-      "hey", "seen", String(_readingNotification.id), "--json"
-    ]
+    var command = ["hey", "seen", String(_readingNotification.id)]
+    if (accountCount > 0 && String(_readingNotification.accountId || "") !== "") {
+      command.push("--account", String(_readingNotification.accountId))
+    }
+    command.push("--json")
+    readProcess.command = command
     readProcess.running = true
   }
 
@@ -483,8 +513,16 @@ Item {
       waitForEnd: true
       onStreamFinished: root._probeOutput = text
     }
+    stderr: StdioCollector {
+      id: probeStderr
+      waitForEnd: true
+      onStreamFinished: root._probeErrorOutput = text
+    }
     onExited: function(exitCode) {
-      root.finishProbe(String(probeStdout.text || root._probeOutput || ""))
+      root.finishProbe(
+        exitCode,
+        String(probeStdout.text || root._probeOutput || ""),
+        String(probeStderr.text || root._probeErrorOutput || ""))
     }
   }
 
@@ -509,11 +547,26 @@ Item {
         root.signedOut()
         return
       }
-      var parsed = exitCode === 0 ? Model.parseAccounts(stdout) : { ok: false, accounts: [] }
-      // An older CLI has no `accounts` command and no `--account` flag.
-      // Fall back to a single merged Imbox instead of failing the refresh.
-      root.accounts = parsed.ok ? parsed.accounts : []
-      root.fetchNotifications(parsed.ok)
+      if (exitCode !== 0) {
+        if (root.accountsCommandUnavailable(stdout, stderr)) {
+          // The compatibility path keeps older CLIs on their merged Imbox.
+          root.accounts = []
+          root.fetchNotifications(false)
+        } else {
+          root.lastError = root.conciseError(stderr || stdout, "Could not list HEY accounts")
+          root.refreshing = false
+        }
+        return
+      }
+
+      var parsed = Model.parseAccounts(stdout)
+      if (!parsed.ok) {
+        root.lastError = root.conciseError(parsed.error, "Could not list HEY accounts")
+        root.refreshing = false
+        return
+      }
+      root.accounts = parsed.accounts
+      root.fetchNotifications(true)
     }
   }
 
@@ -575,13 +628,17 @@ Item {
       var stdout = String(screenerStdout.text || root._screenerOutput || "")
       var stderr = String(screenerStderr.text || root._screenerError || "")
       if (exitCode !== 0) {
+        root.screenerCount = 0
         root.lastError = root.conciseError(Model.parseFailure(stdout, stderr).error || stderr || stdout, "Could not load the HEY Screener count")
         return
       }
 
       var parsed = Model.parseScreenerCount(stdout)
       if (parsed.ok) root.screenerCount = parsed.count
-      else root.lastError = parsed.error
+      else {
+        root.screenerCount = 0
+        root.lastError = parsed.error
+      }
     }
   }
 

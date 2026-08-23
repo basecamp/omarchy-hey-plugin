@@ -3,7 +3,12 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-node --test "$root/tests"/*.test.js
+node --test \
+  --experimental-test-coverage \
+  --test-coverage-lines=90 \
+  --test-coverage-functions=90 \
+  --test-coverage-branches=80 \
+  "$root/tests"/*.test.js
 
 qml_test_runner="${QML_TEST_RUNNER:-}"
 if [[ -z "$qml_test_runner" ]]; then

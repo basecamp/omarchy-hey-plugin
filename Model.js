@@ -47,7 +47,7 @@ function parseJson(raw) {
 
   try {
     var parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== "object") return { ok: false, error: "The HEY CLI returned invalid data", code: "" }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "The HEY CLI returned invalid data", code: "" }
     if (parsed.ok === false) {
       return {
         ok: false,
@@ -351,7 +351,7 @@ function normalizeNotification(value, accountsById) {
     timestampMs: parsedTime,
     url: String(posting.app_url || ""),
     unread: posting.seen !== true,
-    unreadCount: 0
+    unreadCount: positiveInteger(posting.visible_entry_count, 1)
   }
 }
 
