@@ -449,7 +449,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: notifySwitch.left
+              anchors.right: notifyBell.left
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -476,7 +476,19 @@ Panel {
 
             // New-mail toasts, persisted on the bar entry; `hey setup omarchy
             // --notify` and `omarchy bar set 37signals.hey notify true` flip the
-            // same key.
+            // same key. The bell uses the bar's unread highlight when enabled.
+            Text {
+              id: notifyBell
+              anchors.right: notifySwitch.left
+              anchors.rightMargin: Style.space(7)
+              anchors.verticalCenter: parent.verticalCenter
+              visible: !root.needsSetup
+              text: "󰂛"
+              color: service.notify ? root.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.icon
+            }
+
             ToggleSwitch {
               id: notifySwitch
               anchors.right: refreshButton.left
