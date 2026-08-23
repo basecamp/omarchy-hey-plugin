@@ -21,6 +21,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             qt6-declarative-dev-tools \
+            qml6-module-qtqml-workerscript \
             qml6-module-qtquick \
             qml6-module-qttest
       - name: Run tests
