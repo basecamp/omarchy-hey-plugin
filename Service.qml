@@ -33,6 +33,7 @@ Item {
   property string _probeOutput: ""
   property string _probeErrorOutput: ""
   property string _accountsOutput: ""
+  property string _accountsError: ""
   property string _notificationsOutput: ""
   property string _notificationsError: ""
   property string _screenerOutput: ""
@@ -132,10 +133,17 @@ Item {
     }
 
     _accountsOutput = ""
+    _accountsError = ""
     _screenerOutput = ""
     _screenerError = ""
     accountsProcess.running = true
     screenerProcess.running = true
+  }
+
+  function accountsCommandUnavailable(stdout, stderr) {
+    var text = (String(stdout || "") + " " + String(stderr || "")).toLowerCase()
+    return text.indexOf("unknown command \"accounts\"") !== -1
+      || text.indexOf("unknown command 'accounts'") !== -1
   }
 
   function fetchNotifications(withAccountFilter) {
@@ -210,9 +218,12 @@ Item {
     _readError = ""
     actionStatusTimer.stop()
     actionStatus = "Marking email as seen…"
-    readProcess.command = [
-      "hey", "seen", String(_readingNotification.id), "--json"
-    ]
+    var command = ["hey", "seen", String(_readingNotification.id)]
+    if (accountCount > 0 && String(_readingNotification.accountId || "") !== "") {
+      command.push("--account", String(_readingNotification.accountId))
+    }
+    command.push("--json")
+    readProcess.command = command
     readProcess.running = true
   }
 
@@ -272,18 +283,39 @@ Item {
       waitForEnd: true
       onStreamFinished: root._accountsOutput = text
     }
+    stderr: StdioCollector {
+      id: accountsStderr
+      waitForEnd: true
+      onStreamFinished: root._accountsError = text
+    }
     onExited: function(exitCode) {
       var stdout = String(accountsStdout.text || root._accountsOutput || "")
+      var stderr = String(accountsStderr.text || root._accountsError || "")
       if (exitCode !== 0 && Model.parseJson(stdout).code === "auth_required") {
         root.authenticated = false
         root.refreshing = false
         return
       }
-      var parsed = exitCode === 0 ? Model.parseAccounts(stdout) : { ok: false, accounts: [] }
-      // An older CLI has no `accounts` command and no `--account` flag.
-      // Fall back to a single merged Imbox instead of failing the refresh.
-      root.accounts = parsed.ok ? parsed.accounts : []
-      root.fetchNotifications(parsed.ok)
+      if (exitCode !== 0) {
+        if (root.accountsCommandUnavailable(stdout, stderr)) {
+          // The compatibility path keeps older CLIs on their merged Imbox.
+          root.accounts = []
+          root.fetchNotifications(false)
+        } else {
+          root.lastError = root.conciseError(stderr || stdout, "Could not list HEY accounts")
+          root.refreshing = false
+        }
+        return
+      }
+
+      var parsed = Model.parseAccounts(stdout)
+      if (!parsed.ok) {
+        root.lastError = root.conciseError(parsed.error, "Could not list HEY accounts")
+        root.refreshing = false
+        return
+      }
+      root.accounts = parsed.accounts
+      root.fetchNotifications(true)
     }
   }
 

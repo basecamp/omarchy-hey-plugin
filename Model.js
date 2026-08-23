@@ -135,7 +135,7 @@ function normalizeNotification(value, accountsById) {
     timestampMs: parsedTime,
     url: String(posting.app_url || ""),
     unread: posting.seen !== true,
-    unreadCount: 0
+    unreadCount: positiveInteger(posting.visible_entry_count, 1)
   }
 }
 

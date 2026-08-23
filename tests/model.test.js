@@ -122,7 +122,8 @@ test("parseNotifications normalizes postings and account metadata", () => {
       creator: { name: "Ada &amp; Bob", initials: "AB" },
       name: "<b>Hello</b>",
       summary: "First<br>Second",
-      entry_kind: "email"
+      entry_kind: "email",
+      visible_entry_count: 3
     })
   ] }), 50, [{ id: "account-1", name: "Personal", order: 3 }])
 
@@ -142,7 +143,7 @@ test("parseNotifications normalizes postings and account metadata", () => {
     timestampMs: Date.parse("2025-02-03T12:00:00Z"),
     url: "https://app.hey.com/topics/email-1",
     unread: true,
-    unreadCount: 0
+    unreadCount: 3
   })
 })
 

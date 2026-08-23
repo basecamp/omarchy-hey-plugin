@@ -147,13 +147,31 @@ TestCase {
     verify(notificationProcess().running)
   }
 
-  function test_accounts_failure_falls_back_to_the_merged_imbox() {
+  function test_older_cli_falls_back_to_the_merged_imbox() {
     completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", "unsupported command")
+    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
 
     compare(service.accounts, [])
     compare(notificationProcess().command,
       ["hey", "box", "imbox", "--limit", "50", "--json"])
+  }
+
+  function test_account_list_failure_stays_visible_and_retryable() {
+    completeAuthenticatedProbe()
+    accountsProcess().complete(2, "", "credential store unavailable")
+
+    compare(service.lastError, "credential store unavailable")
+    compare(service.refreshing, false)
+    compare(notificationProcess(), null)
+  }
+
+  function test_malformed_account_response_stays_visible_and_retryable() {
+    completeAuthenticatedProbe()
+    accountsProcess().complete(0, "not json", "")
+
+    compare(service.lastError, "Could not parse the HEY CLI response")
+    compare(service.refreshing, false)
+    compare(notificationProcess(), null)
   }
 
   function test_accounts_auth_error_returns_to_setup() {
@@ -167,7 +185,7 @@ TestCase {
 
   function test_notification_success_updates_items_and_unread_count() {
     completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", "unsupported command")
+    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
     notificationProcess().complete(0,
       '{"ok":true,"data":{"postings":['
       + '{"id":"seen","name":"Seen","active_at":"2025-02-02T00:00:00Z","seen":true},'
@@ -183,7 +201,7 @@ TestCase {
 
   function test_slow_screener_does_not_block_the_next_mail_refresh() {
     completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", "unsupported command")
+    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
     notificationProcess().complete(0, '{"ok":true,"data":{"postings":[]}}', "")
 
     verify(screenerProcess().running)
@@ -207,6 +225,18 @@ TestCase {
     screenerProcess().complete(0, "not json", "")
     compare(service.screenerCount, 0)
     compare(service.lastError, "Could not parse the HEY Screener count")
+  }
+
+  function test_mark_read_uses_the_notification_account_with_a_current_cli() {
+    service.accounts = [{ id: "account-1", name: "Personal", order: 0 }]
+    var item = { id: "1", accountId: "account-1", unread: true }
+    service.notifications = [item]
+    service.unreadCount = 1
+
+    service.markRead(item)
+
+    compare(readProcess().command,
+      ["hey", "seen", "1", "--account", "account-1", "--json"])
   }
 
   function test_mark_read_is_optimistic_serial_and_idempotent() {

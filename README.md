@@ -76,7 +76,7 @@ The plugin runs these local CLI commands:
 ```text
 hey accounts list --json
 hey box imbox --account all --limit <count> --json
-hey seen <posting-id> --json
+hey seen <posting-id> [--account <id>] --json
 hey auth token --quiet
 curl https://app.hey.com/clearances.json
 ```
