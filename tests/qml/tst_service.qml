@@ -41,7 +41,8 @@ TestCase {
   function processCommand(process) {
     var raw = process.command
     var payload = Model.capturedCommandPayload(raw)
-    if (payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
+    var setupLock = JSON.stringify(raw) === JSON.stringify(Model.setupLockCheckCommand())
+    if (!setupLock && payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
         || payload[0] === "omarchy-notification-send"
         || (payload[0] === "bash" && String(payload[2] || "").indexOf("hey") !== -1))) {
       verify(raw.length > payload.length, "HEY command has a producer-side output guard")
@@ -55,6 +56,10 @@ TestCase {
       compare(raw[8], "hey-output-guard")
       verify(Number(raw[9]) > 0)
       verify(Number(raw[10]) > 0)
+      verify(Number(raw[11]) >= 0)
+      verify(Number(raw[12]) > 0)
+      if (payload[0] === "setpriv" && payload.indexOf("watch") !== -1) compare(Number(raw[11]), 0)
+      else verify(Number(raw[11]) > 0)
     }
     return payload
   }
@@ -63,7 +68,8 @@ TestCase {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
       var command = processCommand(process)
-      if (command.length > 1 && command[0] === "bash" && command[1] === "-c") return process
+      if (command.length > 2 && command[0] === "bash" && command[1] === "-c"
+          && String(command[2]).indexOf("command -v hey") !== -1) return process
     }
     return null
   }
@@ -131,9 +137,10 @@ TestCase {
   }
 
   function findSetupLockProcess() {
+    var expected = JSON.stringify(Model.setupLockCheckCommand())
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length > 0 && process.command[0] === "flock") return process
+      if (JSON.stringify(process.command) === expected) return process
     }
     return null
   }
@@ -158,7 +165,7 @@ TestCase {
 
     var process = findSetupLockProcess()
     verify(process !== null)
-    compare(process.command, ["flock", "-n", "/tmp/37signals.hey.setup.lock", "true"])
+    compare(process.command, Model.setupLockCheckCommand())
     verify(!service.tryStartSetup())
 
     process.complete(0, "", "")
@@ -571,11 +578,65 @@ TestCase {
     verify(findProbeProcess().running)
   }
 
-  function test_watch_blank_line_is_not_an_event() {
+  function test_watch_blank_or_malformed_lines_are_not_events() {
     settle()
-    findWatchProcess().emitLine("")
+    var watch = findWatchProcess()
+    watch.emitLine("")
+    watch.emitLine("not json")
     tick()
     compare(service.refreshing, false)
+  }
+
+  function test_watch_event_budget_stops_a_flood_and_reconciles_once() {
+    settle()
+    var watch = findWatchProcess()
+    service.watchDebounceMs = 10000
+    service.watchEventLimit = 8
+    service.watchEventWindowMs = 60000
+
+    for (var i = 0; i <= service.watchEventLimit; i++) watch.emitLine("not json " + i)
+
+    compare(service._watchRateLimited, true)
+    compare(service.watching, false)
+    compare(service.connected, false)
+    compare(service.watchRestartScheduled, true)
+    compare(service.watchRestartMs, service.watchAbuseRestartMs)
+    compare(service.watchError, "HEY live updates paused after too many events")
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+
+    finishRefresh()
+    compare(service.refreshing, false)
+    compare(service.watching, false)
+    compare(service._watchRateLimited, true)
+    compare(service.watchRestartScheduled, true)
+
+    service.startWatch(true)
+    compare(service.watching, true)
+    compare(service._watchRateLimited, false)
+    compare(service.watchRestartScheduled, false)
+  }
+
+  function test_signed_out_reconciliation_clears_the_watch_cooldown() {
+    settle()
+    var watch = findWatchProcess()
+    service.watchEventLimit = 4
+    service.watchEventWindowMs = 60000
+
+    for (var i = 0; i <= service.watchEventLimit; i++) watch.emitLine("not json " + i)
+    compare(service._watchRateLimited, true)
+    compare(service.watchRestartScheduled, true)
+    verify(findProbeProcess().running)
+
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
+    compare(service.authenticated, false)
+    compare(service._watchRateLimited, false)
+    compare(service.watchRestartScheduled, false)
+
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    compare(service.authenticated, true)
+    compare(service.watching, true)
   }
 
   function test_watch_auth_exit_asks_to_sign_in_and_waits_for_the_probe() {

@@ -28,7 +28,6 @@ Item {
   property bool authenticated: true
   property bool probed: false
   property bool setupRunning: false
-  readonly property string setupLockPath: Model.setupLockPath(Quickshell.env("XDG_RUNTIME_DIR"))
   readonly property bool setupChecking: setupLockProcess.running
   // True when the probe itself failed (unreadable auth status) — distinct
   // from setup states, so the panel can keep retrying: a transient failure
@@ -70,6 +69,14 @@ Item {
   property string watchError: ""
   property int watchRestartMs: 0
   property double watchStartedAtMs: 0
+  // The event budget keeps a malfunctioning producer from monopolizing the
+  // shell. A normal cable burst is debounced far below this ceiling.
+  property int watchEventLimit: 256
+  property int watchEventWindowMs: 1000
+  property int watchAbuseRestartMs: 60000
+  property double _watchEventWindowStartedAtMs: 0
+  property int _watchEventCount: 0
+  property bool _watchRateLimited: false
   // A stop the service asked for still reports an exit; it is not a failure.
   property bool _watchStopping: false
   property string _watchLastStderr: ""
@@ -246,11 +253,15 @@ Item {
     stopWatch()
   }
 
-  function startWatch() {
+  function startWatch(resumeRateLimited) {
+    if (_watchRateLimited && resumeRateLimited !== true) return
     if (!active || !probed || !installed || cliOutdated || !authenticated || watchProcess.running) return
     watchRestartTimer.stop()
     _watchLastStderr = ""
     watchError = ""
+    _watchEventWindowStartedAtMs = 0
+    _watchEventCount = 0
+    _watchRateLimited = false
     watchStartedAtMs = Date.now()
     watchProcess.command = Model.watchCommand()
     watchProcess.running = true
@@ -258,6 +269,9 @@ Item {
 
   function stopWatch() {
     watchRestartTimer.stop()
+    _watchRateLimited = false
+    _watchEventWindowStartedAtMs = 0
+    _watchEventCount = 0
     watchDebounce.stop()
     toastDebounce.stop()
     _toastQueue = []
@@ -276,7 +290,28 @@ Item {
   // while a read is in flight, since that read may predate them. A line the
   // CLI calls new mail in the Imbox is also a toast, when toasts are on.
   function watchEvent(line) {
-    var event = Model.watchLine(line)
+    if (_watchRateLimited) return
+    var source = String(line || "")
+    if (source.length === 0) return
+
+    var now = Date.now()
+    if (_watchEventWindowStartedAtMs <= 0
+        || now - _watchEventWindowStartedAtMs >= watchEventWindowMs) {
+      _watchEventWindowStartedAtMs = now
+      _watchEventCount = 0
+    }
+    _watchEventCount++
+    if (_watchEventCount > watchEventLimit) {
+      _watchRateLimited = true
+      connected = false
+      watchDebounce.stop()
+      watchError = "HEY live updates paused after too many events"
+      if (watchProcess.running) watchProcess.running = false
+      refresh()
+      return
+    }
+
+    var event = Model.watchLine(source)
     if (event === null) return
     watchError = ""
     if (event.change === "disconnected") {
@@ -343,6 +378,12 @@ Item {
       // The service stopped it — signed out, the CLI gone, a local instance
       // going inert. Not an error, and nothing to restart.
       _watchStopping = false
+      return
+    }
+    if (_watchRateLimited) {
+      watchRestartMs = watchAbuseRestartMs
+      watchRestartTimer.interval = watchRestartMs
+      watchRestartTimer.restart()
       return
     }
     var stderr = _watchLastStderr
@@ -479,7 +520,7 @@ Item {
   Timer {
     id: watchRestartTimer
     repeat: false
-    onTriggered: root.startWatch()
+    onTriggered: root.startWatch(true)
   }
 
   Timer {
@@ -701,7 +742,7 @@ Item {
   Process {
     id: setupLockProcess
     running: false
-    command: ["flock", "-n", root.setupLockPath, "true"]
+    command: Model.setupLockCheckCommand()
     onExited: function(exitCode) {
       // Exit 0 acquired the lock, so no setup process holds it. Any other
       // result fails closed and keeps duplicate authentication blocked.

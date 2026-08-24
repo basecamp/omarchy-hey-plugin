@@ -3,10 +3,24 @@
 // the panel launches in a floating terminal. The launch command preserves
 // the fix's exit status through the IPC refresh so the terminal
 // presentation can honor Ctrl-C (exit 130) from the fix itself.
-var setupLockFilename = "37signals.hey.setup.lock"
+var setupLockDirectoryName = "setup-lock"
+var setupLockShell = "uid=$(id -u) || exit 76; "
+  + "runtime=${XDG_RUNTIME_DIR:-/run/user/$uid}; "
+  + "[ -d \"$runtime\" ] && [ ! -L \"$runtime\" ] "
+  + "&& [ \"$(stat -c %u -- \"$runtime\" 2>/dev/null)\" = \"$uid\" ] "
+  + "&& [ \"$(stat -c %a -- \"$runtime\" 2>/dev/null)\" = 700 ] || exit 76; "
+  + "ensure_private_dir() { path=$1; "
+  + "if mkdir -m 700 -- \"$path\" 2>/dev/null; then return 0; fi; "
+  + "[ -d \"$path\" ] && [ ! -L \"$path\" ] "
+  + "&& [ \"$(stat -c %u -- \"$path\" 2>/dev/null)\" = \"$uid\" ] "
+  + "&& chmod 700 -- \"$path\"; }; "
+  + "umask 077; base=\"$runtime/37signals.hey-$uid\"; "
+  + "ensure_private_dir \"$base\" || exit 76; "
+  + "lock=\"$base/" + setupLockDirectoryName + "\"; "
+  + "ensure_private_dir \"$lock\" || exit 76; "
 
-function setupLockPath(runtimeDir) {
-  return String(runtimeDir || "/tmp").replace(/\/+$/, "") + "/" + setupLockFilename
+function setupLockCheckCommand() {
+  return ["bash", "-c", setupLockShell + "exec 9<\"$lock\"; flock -n 9"]
 }
 
 function shellQuote(value) {
@@ -16,11 +30,11 @@ function shellQuote(value) {
 function setupLaunchCommand(fix, ipcTarget) {
   var target = shellQuote(ipcTarget)
   var completion = "omarchy-shell -q \"$target\" setupFinished"
-  return "target=" + target + "; lock=\"${XDG_RUNTIME_DIR:-/tmp}/" + setupLockFilename + "\"; "
+  return "target=" + target + "; " + setupLockShell
     + "( flock -n 9 || { printf '%s\\n' 'HEY setup is already running.'; exit 75; }; "
     + "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
     + "trap 'rc=$?; trap - EXIT; flock -u 9; " + completion + "; exit $rc' EXIT; "
-    + String(fix || "") + " ) 9>\"$lock\""
+    + String(fix || "") + " ) 9<\"$lock\""
 }
 
 function setupPlan(installed, authenticated, ipcTarget) {
@@ -48,6 +62,8 @@ function setupPlan(installed, authenticated, ipcTarget) {
 var cliResponseByteLimit = 1024 * 1024
 var cliErrorByteLimit = 64 * 1024
 var probeResponseByteLimit = 64 * 1024
+var finiteCommandTimeoutSec = 30
+var finiteCommandKillGraceSec = 2
 var watchOutputByteLimit = 4 * 1024 * 1024
 var watchLineByteLimit = 64 * 1024
 var maximumAccountCount = 32
@@ -67,30 +83,42 @@ var remoteErrorCharacterLimit = 512
 var remoteHintCharacterLimit = 512
 var remoteCodeCharacterLimit = 64
 
-var boundedCaptureScript = "stdout_limit=$1; stderr_limit=$2; shift 2; child_pid=; "
-  + "stop_child() { trap - HUP INT TERM; "
-  + "if [ -n \"$child_pid\" ]; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; wait \"$child_pid\" 2>/dev/null || true; fi; "
-  + "exit 143; }; trap stop_child HUP INT TERM; "
+var boundedCaptureScript = "stdout_limit=$1; stderr_limit=$2; deadline=$3; grace=$4; shift 4; child_pid=; timer_pid=; killer_pid=; timed_out=0; "
+  + "stop_timer() { if [ -n \"$timer_pid\" ]; then kill -TERM -- \"-$timer_pid\" 2>/dev/null || true; kill -TERM \"$timer_pid\" 2>/dev/null || true; wait \"$timer_pid\" 2>/dev/null || true; timer_pid=; fi; }; "
+  + "start_group_killer() { setpriv --pdeathsig KILL setsid bash -c 'end=$((SECONDS + $1)); while kill -0 -- \"-$2\" 2>/dev/null && [ \"$SECONDS\" -lt \"$end\" ]; do sleep 0.1; done; kill -KILL -- \"-$2\" 2>/dev/null || true' hey-output-killer \"$grace\" \"$child_pid\" & killer_pid=$!; }; "
+  + "wait_group_killer() { if [ -n \"$killer_pid\" ]; then wait \"$killer_pid\" 2>/dev/null || true; killer_pid=; fi; }; "
+  + "cleanup_group() { if [ -n \"$child_pid\" ] && kill -0 -- \"-$child_pid\" 2>/dev/null; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; start_group_killer; wait_group_killer; fi; }; "
+  + "terminate_child() { if [ -n \"$child_pid\" ]; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; kill -TERM \"$child_pid\" 2>/dev/null || true; start_group_killer; wait \"$child_pid\" 2>/dev/null || true; wait_group_killer; child_pid=; fi; }; "
+  + "stop_child() { trap - HUP INT TERM USR1; stop_timer; terminate_child; exit 143; }; "
+  + "trap 'timed_out=1' USR1; trap stop_child HUP INT TERM; "
   + "setpriv --pdeathsig KILL setsid \"$@\" "
   + "> >(head -c \"$((stdout_limit + 1))\") "
   + "2> >(head -c \"$((stderr_limit + 1))\" >&2) & child_pid=$!; "
-  + "wait \"$child_pid\"; status=$?; child_pid=; exit \"$status\""
+  + "if [ \"$deadline\" -gt 0 ]; then parent_pid=$BASHPID; "
+  + "setpriv --pdeathsig KILL setsid bash -c 'sleep \"$1\" || exit 0; kill -USR1 \"$2\" 2>/dev/null || exit 0; kill -TERM -- \"-$3\" 2>/dev/null || true; kill -TERM \"$3\" 2>/dev/null || true; end=$((SECONDS + $4)); while kill -0 -- \"-$3\" 2>/dev/null && [ \"$SECONDS\" -lt \"$end\" ]; do sleep 0.1; done; if kill -0 -- \"-$3\" 2>/dev/null; then kill -KILL -- \"-$3\" 2>/dev/null || true; fi' "
+  + "hey-output-timeout \"$deadline\" \"$parent_pid\" \"$child_pid\" \"$grace\" & timer_pid=$!; fi; "
+  + "wait \"$child_pid\"; status=$?; "
+  + "if [ \"$timed_out\" -eq 1 ]; then wait \"$child_pid\" 2>/dev/null || true; status=124; wait \"$timer_pid\" 2>/dev/null || true; timer_pid=; "
+  + "else stop_timer; cleanup_group; fi; child_pid=; exit \"$status\""
 
-function boundedCaptureCommand(command, stdoutLimit, stderrLimit) {
+function boundedCaptureCommand(command, stdoutLimit, stderrLimit, timeoutSeconds, killGraceSeconds) {
   var source = Array.isArray(command) ? command : []
   var stdoutBytes = positiveInteger(stdoutLimit, cliResponseByteLimit)
   var stderrBytes = positiveInteger(stderrLimit, cliErrorByteLimit)
+  var deadline = timeoutSeconds === 0 ? 0 : positiveInteger(timeoutSeconds, finiteCommandTimeoutSec)
+  var grace = positiveInteger(killGraceSeconds, finiteCommandKillGraceSec)
   return ["setpriv", "--pdeathsig", "TERM", "bash", "-o", "pipefail", "-c",
-    boundedCaptureScript, "hey-output-guard", String(stdoutBytes), String(stderrBytes)].concat(source)
+    boundedCaptureScript, "hey-output-guard", String(stdoutBytes), String(stderrBytes),
+    String(deadline), String(grace)].concat(source)
 }
 
 function capturedCommandPayload(command) {
   var source = Array.isArray(command) ? command : []
-  if (source.length < 11 || source[0] !== "setpriv" || source[1] !== "--pdeathsig"
+  if (source.length < 13 || source[0] !== "setpriv" || source[1] !== "--pdeathsig"
       || source[2] !== "TERM" || source[3] !== "bash" || source[4] !== "-o"
       || source[5] !== "pipefail" || source[6] !== "-c"
       || source[7] !== boundedCaptureScript || source[8] !== "hey-output-guard") return source.slice()
-  return source.slice(11)
+  return source.slice(13)
 }
 
 function exceedsUtf8ByteLimit(value, limit) {
@@ -253,23 +281,22 @@ function boxCommand(limit, withAccountFilter) {
 function watchCommand() {
   return boundedCaptureCommand(
     ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"],
-    watchOutputByteLimit, cliErrorByteLimit)
+    watchOutputByteLimit, cliErrorByteLimit, 0)
 }
 
 // watchLine reads one line from hey watch: its change — added, updated or
 // deleted for a thread; ready, disconnected or resync about the watch — and,
 // for a thread, whether the CLI called it new mail, the box it is in and the
-// posting itself. A blank line is nothing; a line that is not JSON — there are
-// none, but stdout is stdout — counts as a change.
+// posting itself. Blank, malformed and oversized lines are discarded.
 function watchLine(line) {
   var source = String(line || "")
-  var event = { change: "unknown", isNew: false, boxKind: "", boxName: "", posting: null }
-  if (exceedsUtf8ByteLimit(source, watchLineByteLimit)) return event
+  if (exceedsUtf8ByteLimit(source, watchLineByteLimit)) return null
   var text = source.trim()
   if (text === "") return null
   try {
     var value = JSON.parse(text)
-    if (!value || typeof value.change !== "string") return event
+    if (!value || typeof value.change !== "string") return null
+    var event = { change: "", isNew: false, boxKind: "", boxName: "", posting: null }
     event.change = boundedString(value.change, remoteTypeCharacterLimit)
     event.isNew = value["new"] === true
     if (value.box && typeof value.box === "object") {
@@ -279,7 +306,7 @@ function watchLine(line) {
     if (value.posting && typeof value.posting === "object") event.posting = boundedWatchPosting(value.posting)
     return event
   } catch (error) {
-    return event
+    return null
   }
 }
 
@@ -701,18 +728,27 @@ function notificationBadgeText(item, hovered) {
   return String(Math.max(1, (item && item.unreadCount) || 0))
 }
 
+function decodeTextEntity(entity) {
+  switch (String(entity || "").toLowerCase()) {
+    case "&nbsp;": return " "
+    case "&amp;": return "&"
+    case "&lt;": return "<"
+    case "&gt;": return ">"
+    case "&#39;":
+    case "&apos;": return "'"
+    case "&quot;": return "\""
+    default: return ""
+  }
+}
+
 function cleanText(value, limit) {
   var maximum = positiveInteger(limit, remoteExcerptCharacterLimit)
   var text = boundedString(value, maximum)
     .replace(/\\[nrt]/g, " ")
+    .replace(/&(?:nbsp|amp|lt|gt|#39|apos|quot);/gi, decodeTextEntity)
     .replace(/<br\s*\/?\s*>/gi, " ")
     .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, "\"")
-    .replace(/&amp;/gi, "&")
+    .replace(/[<>]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
   return boundedString(text, maximum)
@@ -756,7 +792,7 @@ function notificationMeta(item, nowMs, showAccount) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    setupLockPath: setupLockPath,
+    setupLockCheckCommand: setupLockCheckCommand,
     setupLaunchCommand: setupLaunchCommand,
     setupPlan: setupPlan,
     boundedCaptureCommand: boundedCaptureCommand,
@@ -767,6 +803,8 @@ if (typeof module !== "undefined") {
     cliResponseByteLimit: cliResponseByteLimit,
     cliErrorByteLimit: cliErrorByteLimit,
     probeResponseByteLimit: probeResponseByteLimit,
+    finiteCommandTimeoutSec: finiteCommandTimeoutSec,
+    finiteCommandKillGraceSec: finiteCommandKillGraceSec,
     watchOutputByteLimit: watchOutputByteLimit,
     watchLineByteLimit: watchLineByteLimit,
     maximumAccountCount: maximumAccountCount,

@@ -11,6 +11,12 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function waitForProcessExitSync(pid, attempts = 200) {
+  for (let i = 0; i < attempts && fs.existsSync(`/proc/${pid}`); i++) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+  }
+}
+
 test("setupPlan signs in when the HEY CLI is installed", () => {
   const plan = Model.setupPlan(true, false, "37signals.hey")
 
@@ -37,9 +43,16 @@ test("setupPlan is not needed when setup is complete", () => {
   assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
 })
 
-test("setupLockPath uses the runtime directory with a safe fallback", () => {
-  assert.equal(Model.setupLockPath("/run/user/1000/"), "/run/user/1000/37signals.hey.setup.lock")
-  assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
+test("setupLockCheckCommand uses a private runtime directory without a /tmp fallback", () => {
+  const command = Model.setupLockCheckCommand()
+  assert.deepEqual(command.slice(0, 2), ["bash", "-c"])
+  assert.match(command[2], /XDG_RUNTIME_DIR:-\/run\/user\/\$uid/)
+  assert.match(command[2], /37signals\.hey-\$uid/)
+  assert.match(command[2], /stat -c %a/)
+  assert.match(command[2], /exec 9<"\$lock"/)
+  assert.match(command[2], /flock -n 9$/)
+  assert.doesNotMatch(command[2], /\/tmp/)
+  assert.doesNotMatch(command[2], /9>/)
 })
 
 test("boxCommand reads the Imbox for the panel's threads through a bounded capture", () => {
@@ -51,9 +64,11 @@ test("boxCommand reads the Imbox for the panel's threads through a bounded captu
     ["hey", "box", "imbox", "--limit", "50", "--json"])
 })
 
-test("watchCommand follows every box of every account through a bounded capture", () => {
-  assert.deepEqual(Model.capturedCommandPayload(Model.watchCommand()),
+test("watchCommand follows every box without a finite-command deadline", () => {
+  const command = Model.watchCommand()
+  assert.deepEqual(Model.capturedCommandPayload(command),
     ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+  assert.equal(command[11], "0")
 })
 
 test("boundedCaptureCommand caps stdout and stderr at one detectable extra byte", () => {
@@ -68,14 +83,53 @@ test("boundedCaptureCommand caps stdout and stderr at one detectable extra byte"
   assert.equal(Buffer.byteLength(result.stderr), 9)
   assert.equal(Model.exceedsUtf8ByteLimit(result.stdout, 16), true)
   assert.equal(Model.exceedsUtf8ByteLimit(result.stderr, 8), true)
+  assert.equal(command[11], String(Model.finiteCommandTimeoutSec))
+  assert.equal(command[12], String(Model.finiteCommandKillGraceSec))
+})
+
+test("boundedCaptureCommand times out a silent TERM-ignoring payload", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hey-output-timeout-"))
+  const pidPath = path.join(directory, "payload.pid")
+  const command = Model.boundedCaptureCommand([
+    "bash", "-c", 'trap "exit 0" TERM; (trap "" TERM; while :; do sleep 30; done) & printf "%s" "$!" > "$1"; while :; do wait || true; done', "payload", pidPath
+  ], 16, 8, 1, 1)
+  const startedAt = Date.now()
+
+  try {
+    const result = spawnSync(command[0], command.slice(1), { encoding: "utf8", timeout: 5000 })
+    const payloadPid = Number(fs.readFileSync(pidPath, "utf8"))
+    assert.equal(result.status, 124, result.stderr)
+    assert.ok(Date.now() - startedAt < 4000, "the deadline completed promptly")
+    assert.equal(fs.existsSync(`/proc/${payloadPid}`), false, "the timed-out process group was killed")
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("boundedCaptureCommand cleans up a descendant after its leader exits", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hey-output-descendant-"))
+  const pidPath = path.join(directory, "descendant.pid")
+  const command = Model.boundedCaptureCommand([
+    "bash", "-c", '(trap "" TERM; while :; do sleep 30; done) & printf "%s" "$!" > "$1"', "payload", pidPath
+  ], 16, 8, 30, 1)
+
+  try {
+    const result = spawnSync(command[0], command.slice(1), { encoding: "utf8", timeout: 5000 })
+    const descendantPid = Number(fs.readFileSync(pidPath, "utf8"))
+    assert.equal(result.status, 0, result.stderr)
+    waitForProcessExitSync(descendantPid)
+    assert.equal(fs.existsSync(`/proc/${descendantPid}`), false, "the descendant did not outlive the finite command")
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("boundedCaptureCommand terminates the payload process group with its wrapper", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hey-output-guard-"))
   const pidPath = path.join(directory, "payload.pid")
   const command = Model.boundedCaptureCommand([
-    "bash", "-c", 'printf "%s" "$$" > "$1"; exec sleep 30', "payload", pidPath
-  ], 16, 8)
+    "bash", "-c", 'trap "exit 0" TERM; (trap "" TERM; while :; do sleep 30; done) & printf "%s" "$!" > "$1"; while :; do wait || true; done', "payload", pidPath
+  ], 16, 8, 30, 1)
   const wrapper = spawn(command[0], command.slice(1), { stdio: "ignore" })
   let payloadPid = 0
 
@@ -111,8 +165,8 @@ test("boundedCaptureCommand exits with its Quickshell-style parent", async () =>
   const guardPath = path.join(directory, "guard.pid")
   const payloadPath = path.join(directory, "payload.pid")
   const command = Model.boundedCaptureCommand([
-    "bash", "-c", 'printf "%s" "$$" > "$1"; exec sleep 30', "payload", payloadPath
-  ], 16, 8)
+    "bash", "-c", 'trap "exit 0" TERM; (trap "" TERM; while :; do sleep 30; done) & printf "%s" "$!" > "$1"; while :; do wait || true; done', "payload", payloadPath
+  ], 16, 8, 30, 1)
   let guardPid = 0
   let payloadPid = 0
 
@@ -140,7 +194,7 @@ test("boundedCaptureCommand exits with its Quickshell-style parent", async () =>
     guardPid = Number(fs.readFileSync(guardPath, "utf8"))
     payloadPid = Number(fs.readFileSync(payloadPath, "utf8"))
 
-    for (let i = 0; i < 100 && (fs.existsSync(`/proc/${guardPid}`) || fs.existsSync(`/proc/${payloadPid}`)); i++) await delay(10)
+    for (let i = 0; i < 300 && (fs.existsSync(`/proc/${guardPid}`) || fs.existsSync(`/proc/${payloadPid}`)); i++) await delay(10)
     assert.equal(fs.existsSync(`/proc/${guardPid}`), false, "the guard did not outlive its parent")
     assert.equal(fs.existsSync(`/proc/${payloadPid}`), false, "the payload did not outlive its guard")
   } finally {
@@ -236,8 +290,8 @@ test("watchLine reads a hey watch line: the change, the box, and whether it is n
   assert.equal(ready.isNew, false)
   assert.equal(ready.posting, null)
   assert.equal(Model.watchLine("   "), null)
-  assert.equal(Model.watchLine("not json").change, "unknown")
-  assert.equal(Model.watchLine("x".repeat(Model.watchLineByteLimit + 1)).change, "unknown")
+  assert.equal(Model.watchLine("not json"), null)
+  assert.equal(Model.watchLine("x".repeat(Model.watchLineByteLimit + 1)), null)
 
   const bounded = Model.watchLine(JSON.stringify({
     change: "added",

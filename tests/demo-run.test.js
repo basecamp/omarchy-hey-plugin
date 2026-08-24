@@ -2,7 +2,7 @@ const test = require("node:test")
 const assert = require("node:assert/strict")
 const {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, rmSync, writeFileSync
+  readdirSync, rmSync, symlinkSync, writeFileSync
 } = require("node:fs")
 const { tmpdir } = require("node:os")
 const path = require("node:path")
@@ -29,6 +29,7 @@ function harness() {
   for (const directory of [home, runtime, control, bin, path.join(omarchy, "shell"), installedPlugin]) {
     mkdirSync(directory, { recursive: true })
   }
+  chmodSync(runtime, 0o700)
   writeFileSync(path.join(installedPlugin, "original"), "installed plugin")
   const originalConfig = JSON.stringify({ bar: { layout: { right: [{ id: "original.widget" }] } } }, null, 2) + "\n"
   writeFileSync(shellConfig, originalConfig)
@@ -194,6 +195,43 @@ test("demo run rejects a concurrent launch", async () => {
     first.kill("SIGTERM")
     const finished = await firstResult
     assert.equal(finished.code, 130, finished.stderr)
+    assertRestored(subject)
+  } finally {
+    stopHarness(subject)
+  }
+})
+
+test("demo run rejects a planted lock symlink without modifying its target", () => {
+  const subject = harness()
+  try {
+    const lockBase = path.join(subject.runtime, `37signals.hey-${process.getuid()}`)
+    const victim = path.join(subject.runtime, "victim.txt")
+    mkdirSync(lockBase, { mode: 0o700 })
+    writeFileSync(victim, "keep this content")
+    symlinkSync(victim, path.join(lockBase, "demo-lock"))
+
+    const result = spawnSync(demoRun, ["--screenshot"], {
+      encoding: "utf8", env: subject.env, timeout: 3000
+    })
+
+    assert.equal(result.status, 76)
+    assert.equal(readFileSync(victim, "utf8"), "keep this content")
+    assertRestored(subject)
+  } finally {
+    stopHarness(subject)
+  }
+})
+
+test("demo run rejects a runtime directory accessible to other users", () => {
+  const subject = harness()
+  try {
+    chmodSync(subject.runtime, 0o777)
+    const result = spawnSync(demoRun, ["--screenshot"], {
+      encoding: "utf8", env: subject.env, timeout: 3000
+    })
+
+    assert.equal(result.status, 76)
+    assert.match(result.stderr, /private user runtime directory/)
     assertRestored(subject)
   } finally {
     stopHarness(subject)

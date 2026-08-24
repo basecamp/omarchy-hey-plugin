@@ -55,6 +55,27 @@ omarchy plugin add ~/code/basecamp/omarchy-hey-plugin --enable
 
 The plugin manifest declares the right bar section as its default placement.
 
+## Updating
+
+Update the plugin checkout through Omarchy:
+
+```bash
+omarchy plugin update 37signals.hey --yes
+```
+
+HEY CLI updates arrive through the normal Omarchy and AUR package update process. The panel reports when the installed CLI is older than its minimum supported version.
+
+## Removal
+
+Remove the desktop integration and plugin with:
+
+```bash
+hey setup omarchy --remove
+omarchy plugin remove 37signals.hey --yes
+```
+
+Plugin removal unloads HEY and removes its checkout. The HEY CLI package, its credential store, and the saved plugin settings in `~/.config/omarchy/shell.json` are separate and remain available for a future installation. Clear the stored HEY credentials with `hey auth logout`; if the CLI is no longer used elsewhere, remove its package separately through Omarchy's package manager.
+
 ## Usage
 
 - Left-click the HEY logo to open or close the panel.
@@ -92,7 +113,7 @@ Demo mode runs the plugin against `demo/bin/hey`, which implements the same CLI 
 
 ## Live updates
 
-The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey --account all watch --events added,updated,deleted,new,resync` follows every HEY box of every linked account over HEY's cable — a persisted default account selection cannot hide changes from the panel — and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. A fixed 10-minute refresh also rechecks the Imbox and Screener count, covering missed events and data that does not arrive through the box stream.
+The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey --account all watch --events added,updated,deleted,new,resync` follows every HEY box of every linked account over HEY's cable — a persisted default account selection cannot hide changes from the panel — and prints a line per change. Each well-formed, bounded event wakes an Imbox read, debounced so a burst costs one read plus one follow-up when changes land while a read is in flight. Malformed events are discarded, and an event-rate budget pauses an abusive watch for one minute while a full read reconciles the panel. The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. A fixed 10-minute refresh also rechecks the Imbox and Screener count, covering missed events and data that does not arrive through the box stream.
 
 The bar logo's tooltip says `live` while the watch has said `ready` and not `disconnected` since. When the watch stops for a reason other than being signed out, the panel header says so and the plugin restarts it on a backoff (two seconds, doubling to a minute); signed out, it waits for you to sign in again.
 
@@ -122,12 +143,14 @@ hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
 hey seen <posting-id> [--account <id>] --json
 hey [--account <id>] tui --instance omarchy --topic <topic-id> [--remote]
-flock -n $XDG_RUNTIME_DIR/37signals.hey.setup.lock true
+flock -n <private runtime directory descriptor>
 omarchy-notification-send --app-name HEY -u low --exec <configured HEY terminal, app, or browser command> <headline> [description] -i hey -p [-r <id>]
 ```
 
-`hey watch` is run under `setpriv --pdeathsig TERM`, so it ends with the shell that started it. Email data is held in the Quickshell process memory. The plugin does not write email content, credentials, or tokens to disk, and never handles a token at all; the watch keeps no state file either.
+Finite CLI and notification-helper requests have bounded output and a 30-second deadline followed by process-group termination; the intentional long-lived `hey watch` is output- and event-rate-bounded and runs under `setpriv --pdeathsig TERM`, so it ends with the shell that started it.
+
+Email data is held in Quickshell memory. Notification subjects and excerpts are passed as arguments to the local `omarchy-notification-send` helper and delivered to the local notification daemon; a selected subject can also be passed as a topic title to the local HEY Terminal UI process. Those arguments may be visible briefly to other processes running as the same user. The plugin does not write email content, credentials, or tokens to disk, and never handles a token at all; the watch keeps no state file either.
 
 ## License
 
-MIT
+MIT. Third-party attributions are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
