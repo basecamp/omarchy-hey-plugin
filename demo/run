@@ -11,7 +11,8 @@ state_dir=""
 backup_dir=""
 installed_backup=""
 shell_config_backup="${shell_config}.hey-demo-backup"
-demo_lock="${XDG_RUNTIME_DIR:-/tmp}/37signals.hey.demo.lock"
+runtime_dir=""
+demo_lock=""
 demo_launcher_pid=""
 demo_shell_pid=""
 shell_stopped=0
@@ -67,6 +68,15 @@ require_command() {
     echo "Demo mode requires '$1'." >&2
     exit 1
   }
+}
+
+ensure_private_directory() {
+  local path=$1
+  if mkdir -m 700 -- "$path" 2>/dev/null; then
+    return 0
+  fi
+  [[ -d $path && ! -L $path && $(stat -c %u -- "$path" 2>/dev/null) == "$uid" ]] || return 1
+  chmod 700 -- "$path"
 }
 
 shell_instances() {
@@ -214,15 +224,26 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-for command in flock grim hyprctl jq omarchy-launch-shell omarchy-restart-shell omarchy-shell python3 quickshell timeout; do
+for command in flock grim hyprctl id jq omarchy-launch-shell omarchy-restart-shell omarchy-shell python3 quickshell stat timeout; do
   require_command "$command"
 done
 
 [[ -f $fixture ]] || { echo "Demo fixture not found: $fixture" >&2; exit 1; }
 [[ -f $shell_config ]] || { echo "Shell configuration not found: $shell_config" >&2; exit 1; }
 
-mkdir -p "$(dirname "$demo_lock")"
-exec 9>"$demo_lock"
+uid=$(id -u) || exit 76
+runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$uid}
+[[ -d $runtime_dir && ! -L $runtime_dir \
+  && $(stat -c %u -- "$runtime_dir" 2>/dev/null) == "$uid" \
+  && $(stat -c %a -- "$runtime_dir" 2>/dev/null) == 700 ]] || {
+  echo "Demo mode requires a private user runtime directory." >&2
+  exit 76
+}
+lock_base="$runtime_dir/37signals.hey-$uid"
+ensure_private_directory "$lock_base" || exit 76
+demo_lock="$lock_base/demo-lock"
+ensure_private_directory "$demo_lock" || exit 76
+exec 9<"$demo_lock"
 flock -n 9 || { echo "HEY demo mode is already running." >&2; exit 1; }
 [[ ! -L $shell_config ]] || { echo "Demo mode does not modify symlinked shell configurations." >&2; exit 1; }
 
@@ -262,7 +283,7 @@ for candidate in $(seq 10 99); do
 done
 [[ -n $demo_workspace ]] || { echo "Could not find an empty demo workspace." >&2; exit 1; }
 
-backup_dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/hey-demo.XXXXXX")
+backup_dir=$(mktemp -d "$runtime_dir/hey-demo.XXXXXX")
 state_dir="$backup_dir/state"
 mkdir -p "$state_dir"
 

@@ -56,6 +56,10 @@ TestCase {
       compare(raw[8], "hey-output-guard")
       verify(Number(raw[9]) > 0)
       verify(Number(raw[10]) > 0)
+      verify(Number(raw[11]) >= 0)
+      verify(Number(raw[12]) > 0)
+      if (payload[0] === "setpriv" && payload.indexOf("watch") !== -1) compare(Number(raw[11]), 0)
+      else verify(Number(raw[11]) > 0)
     }
     return payload
   }
@@ -574,11 +578,65 @@ TestCase {
     verify(findProbeProcess().running)
   }
 
-  function test_watch_blank_line_is_not_an_event() {
+  function test_watch_blank_or_malformed_lines_are_not_events() {
     settle()
-    findWatchProcess().emitLine("")
+    var watch = findWatchProcess()
+    watch.emitLine("")
+    watch.emitLine("not json")
     tick()
     compare(service.refreshing, false)
+  }
+
+  function test_watch_event_budget_stops_a_flood_and_reconciles_once() {
+    settle()
+    var watch = findWatchProcess()
+    service.watchDebounceMs = 10000
+    service.watchEventLimit = 8
+    service.watchEventWindowMs = 60000
+
+    for (var i = 0; i <= service.watchEventLimit; i++) watch.emitLine("not json " + i)
+
+    compare(service._watchRateLimited, true)
+    compare(service.watching, false)
+    compare(service.connected, false)
+    compare(service.watchRestartScheduled, true)
+    compare(service.watchRestartMs, service.watchAbuseRestartMs)
+    compare(service.watchError, "HEY live updates paused after too many events")
+    compare(service.refreshing, true)
+    verify(findProbeProcess().running)
+
+    finishRefresh()
+    compare(service.refreshing, false)
+    compare(service.watching, false)
+    compare(service._watchRateLimited, true)
+    compare(service.watchRestartScheduled, true)
+
+    service.startWatch(true)
+    compare(service.watching, true)
+    compare(service._watchRateLimited, false)
+    compare(service.watchRestartScheduled, false)
+  }
+
+  function test_signed_out_reconciliation_clears_the_watch_cooldown() {
+    settle()
+    var watch = findWatchProcess()
+    service.watchEventLimit = 4
+    service.watchEventWindowMs = 60000
+
+    for (var i = 0; i <= service.watchEventLimit; i++) watch.emitLine("not json " + i)
+    compare(service._watchRateLimited, true)
+    compare(service.watchRestartScheduled, true)
+    verify(findProbeProcess().running)
+
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
+    compare(service.authenticated, false)
+    compare(service._watchRateLimited, false)
+    compare(service.watchRestartScheduled, false)
+
+    beginRefresh()
+    findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
+    compare(service.authenticated, true)
+    compare(service.watching, true)
   }
 
   function test_watch_auth_exit_asks_to_sign_in_and_waits_for_the_probe() {

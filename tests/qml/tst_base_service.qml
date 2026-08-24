@@ -43,6 +43,10 @@ TestCase {
       compare(raw[8], "hey-output-guard")
       verify(Number(raw[9]) > 0)
       verify(Number(raw[10]) > 0)
+      verify(Number(raw[11]) >= 0)
+      verify(Number(raw[12]) > 0)
+      if (payload[0] === "setpriv" && payload.indexOf("watch") !== -1) compare(Number(raw[11]), 0)
+      else verify(Number(raw[11]) > 0)
     }
     return payload
   }

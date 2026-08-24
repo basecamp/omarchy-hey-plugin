@@ -1,3 +1,5 @@
+// Adapted from Omarchy's Dropdown.qml under the MIT terms in
+// THIRD_PARTY_NOTICES.md.
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
