@@ -59,7 +59,7 @@ test("cliTooOld recognizes a CLI without hey watch, hey box --account or --event
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
-  assert.match(Model.cliTooOldMessage, /0\.2\.1/)
+  assert.match(Model.cliTooOldMessage, /0\.2\.2/)
 })
 
 test("probeCommand asks for the version ahead of the auth status, through bash", () => {
@@ -81,7 +81,8 @@ test("cliVersionTooOld holds a release below the minimum against the CLI, and no
   assert.equal(Model.cliVersionTooOld("0.1.1"), true)
   assert.equal(Model.cliVersionTooOld("v0.1.9"), true)
   assert.equal(Model.cliVersionTooOld("0.2.0"), true)
-  assert.equal(Model.cliVersionTooOld("0.2.1"), false)
+  assert.equal(Model.cliVersionTooOld("0.2.1"), true)
+  assert.equal(Model.cliVersionTooOld("0.2.2"), false)
   assert.equal(Model.cliVersionTooOld("0.10.0"), false)
   assert.equal(Model.cliVersionTooOld("1.0.0"), false)
   assert.equal(Model.cliVersionTooOld("dev"), false)

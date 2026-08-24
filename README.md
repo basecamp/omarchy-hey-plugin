@@ -21,32 +21,31 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 ## Requirements
 
 - Omarchy with Quickshell plugin support.
-- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.1 or newer — the plugin runs `hey box imbox`, `hey watch --events …,new,resync`, and topic-aware TUI commands. It is on the AUR:
+- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.2 or newer.
+- A HEY account.
 
-  ```bash
-  omarchy pkg aur add hey-cli
-  ```
+## Installation
 
-- An authenticated HEY CLI login.
-
-When the HEY CLI is missing or signed out, the panel shows a setup button. Click it to run the install or sign-in in a floating terminal. The panel detects completion on its own. You can also copy the shown command and run it yourself. An older CLI without `hey watch` is reported in the panel header.
-
-Authenticate and confirm that the CLI can see your Imbox:
+Install the CLI from the AUR, enable the plugin, complete HEY's guided setup, and add the CLI's Omarchy desktop integration:
 
 ```bash
-hey auth login
+omarchy pkg aur add hey-cli
+omarchy plugin add https://github.com/basecamp/omarchy-hey-plugin.git --enable
+hey
+hey setup omarchy
+```
+
+The first `hey` run signs in through the browser and shows the accounts linked to your HEY identity. `hey setup omarchy` adds the HEY Terminal UI launcher, SUPER+SPACE menu entry, and theme template. Use `hey setup omarchy --notify` instead to turn on new-mail notifications during desktop setup; they remain off by default and can also be enabled from the panel settings.
+
+When the HEY CLI is missing or signed out, the panel shows a setup button that installs the AUR package or opens HEY sign-in in a floating terminal. The panel detects completion automatically. You can also copy the displayed command and run it yourself.
+
+Confirm that the CLI can see your Imbox:
+
+```bash
 hey box imbox
 ```
 
 The plugin uses the CLI's existing credential store. Credentials stay managed by the HEY CLI; the plugin never reads a token.
-
-## Installation
-
-Install and enable the published repository with:
-
-```bash
-omarchy plugin add https://github.com/basecamp/omarchy-hey-plugin.git --enable
-```
 
 For a local checkout, pass its path instead:
 
