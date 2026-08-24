@@ -315,6 +315,7 @@ test("notificationBadgeText shows a count or close glyph", () => {
 
 test("cleanText removes markup, decodes entities, rejects objects, and bounds work", () => {
   assert.equal(Model.cleanText(` A\\n<br> B &nbsp; &lt;x&gt; &amp; &#39;y&#39; &quot;`), "A B <x> & 'y' \"")
+  assert.equal(Model.cleanText("&amp;lt;x&amp;gt;"), "&lt;x&gt;")
   assert.equal(Model.cleanText("x".repeat(1000), 10), "x".repeat(10))
   assert.equal(Model.cleanText({ text: "no" }), "")
   assert.equal(Model.cleanText(null), "")
