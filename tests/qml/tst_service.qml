@@ -38,10 +38,32 @@ TestCase {
     service = null
   }
 
+  function processCommand(process) {
+    var raw = process.command
+    var payload = Model.capturedCommandPayload(raw)
+    if (payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
+        || payload[0] === "omarchy-notification-send"
+        || (payload[0] === "bash" && String(payload[2] || "").indexOf("hey") !== -1))) {
+      verify(raw.length > payload.length, "HEY command has a producer-side output guard")
+      compare(raw[0], "setpriv")
+      compare(raw[1], "--pdeathsig")
+      compare(raw[2], "TERM")
+      compare(raw[3], "bash")
+      compare(raw[4], "-o")
+      compare(raw[5], "pipefail")
+      compare(raw[6], "-c")
+      compare(raw[8], "hey-output-guard")
+      verify(Number(raw[9]) > 0)
+      verify(Number(raw[10]) > 0)
+    }
+    return payload
+  }
+
   function findProbeProcess() {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length > 0 && process.command[0] === "bash") return process
+      var command = processCommand(process)
+      if (command.length > 1 && command[0] === "bash" && command[1] === "-c") return process
     }
     return null
   }
@@ -49,7 +71,8 @@ TestCase {
   function findHeyProcess(subcommand) {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length > 1 && process.command[0] === "hey" && process.command[1] === subcommand) return process
+      var command = processCommand(process)
+      if (command.length > 1 && command[0] === "hey" && command[1] === subcommand) return process
     }
     return null
   }
@@ -65,7 +88,7 @@ TestCase {
       accounts.complete(0, '{"ok":true,"data":[{"id":"1","name":"Personal"},{"id":"all","name":"All"}]}', "")
     } else {
       accounts.complete(1, "", '{"ok":false,"error":"unknown command \\"account\\" for \\"hey\\"","code":"usage"}')
-      compare(accounts.command, ["hey", "accounts", "list", "--json"])
+      compare(processCommand(accounts), ["hey", "accounts", "list", "--json"])
       accounts.complete(1, "", '{"ok":false,"error":"unknown command \\"accounts\\" for \\"hey\\"","code":"usage"}')
     }
     var box = findHeyProcess("box")
@@ -92,7 +115,8 @@ TestCase {
   function findWatchProcess() {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length > 0 && process.command[0] === "setpriv") return process
+      var command = processCommand(process)
+      if (command.length > 0 && command[0] === "setpriv") return process
     }
     return null
   }
@@ -100,7 +124,8 @@ TestCase {
   function findToastProcess() {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length > 0 && process.command[0] === "omarchy-notification-send") return process
+      var command = processCommand(process)
+      if (command.length > 0 && command[0] === "omarchy-notification-send") return process
     }
     return null
   }
@@ -152,7 +177,7 @@ TestCase {
 
   function test_box_reads_the_imbox_for_every_account() {
     var box = refreshToBox(true)
-    compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
+    compare(processCommand(box), ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
 
     box.complete(0, '{"ok":true,"data":{"id":1,"name":"Imbox","postings":[' +
       '{"id":7,"name":"Lunch on Thursday?","seen":false,"account_id":1,"creator":{"name":"Maria Delgado"}},' +
@@ -165,13 +190,13 @@ TestCase {
 
   function test_box_drops_the_account_filter_for_an_older_cli() {
     var box = refreshToBox(false)
-    compare(box.command, ["hey", "box", "imbox", "--limit", "50", "--json"])
+    compare(processCommand(box), ["hey", "box", "imbox", "--limit", "50", "--json"])
   }
 
   function test_box_keeps_a_bounded_thread_limit() {
     service.settings = { maxNotifications: 20 }
     var box = refreshToBox(true)
-    compare(box.command, ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
+    compare(processCommand(box), ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
   }
 
   function test_watch_starts_once_signed_in() {
@@ -182,7 +207,7 @@ TestCase {
     var watch = findWatchProcess()
     verify(watch !== null)
     verify(watch.running)
-    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+    compare(processCommand(watch), ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
     compare(service.watching, true)
     // Alive is not the same as live: the watch has not said ready.
     compare(service.connected, false)
@@ -242,7 +267,7 @@ TestCase {
     service.markRead(service.notifications[0])
     var seen = findHeyProcess("seen")
     verify(seen !== null)
-    compare(seen.command, ["hey", "seen", "7", "--json"])
+    compare(processCommand(seen), ["hey", "seen", "7", "--json"])
 
     seen.complete(1, "", '{"ok":false,"error":"could not mark as seen","code":"api"}')
     // The panel marked it seen optimistically and the cable has nothing to
@@ -258,10 +283,10 @@ TestCase {
     service.markRead(service.notifications[0])
     service.markRead(service.notifications[1])
     var seen = findHeyProcess("seen")
-    compare(seen.command, ["hey", "seen", "7", "--json"])
+    compare(processCommand(seen), ["hey", "seen", "7", "--json"])
     seen.complete(0, '{"ok":true,"data":{}}', "")
     // The second mark runs once the first has answered.
-    compare(seen.command, ["hey", "seen", "8", "--json"])
+    compare(processCommand(seen), ["hey", "seen", "8", "--json"])
     verify(seen.running)
     compare(service.actionStatus, "Marking email as seen…")
     seen.complete(0, '{"ok":true,"data":{}}', "")
@@ -334,14 +359,14 @@ TestCase {
   function test_a_new_imbox_line_is_a_toast_from_the_plugin() {
     settleNotifying()
     var watch = findWatchProcess()
-    compare(watch.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+    compare(processCommand(watch), ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
 
     watch.emitLine(newLunchLine)
     tick()
     var toast = findToastProcess()
     verify(toast !== null)
     verify(toast.running)
-    compare(toast.command, [
+    compare(processCommand(toast), [
       "omarchy-notification-send",
       "--app-name", "HEY",
       "-u", "low",
@@ -364,7 +389,7 @@ TestCase {
     tick()
     var toast = findToastProcess()
     verify(toast !== null)
-    compare(toast.command.slice(-5), ["HEY\n2 new in Imbox", "Maria Delgado, Northwind Invoicing", "-i", "hey", "-p"])
+    compare(processCommand(toast).slice(-5), ["HEY\n2 new in Imbox", "Maria Delgado, Northwind Invoicing", "-i", "hey", "-p"])
     toast.complete(0, "42\n", "")
     compare(service._toastId, 42)
   }
@@ -376,12 +401,12 @@ TestCase {
     watch.emitLine(newLunchLine)
     tick()
     var toast = findToastProcess()
-    compare(toast.command.indexOf("-r"), -1)
+    compare(processCommand(toast).indexOf("-r"), -1)
     toast.complete(0, "42\n", "")
 
     watch.emitLine(newInvoiceLine)
     tick()
-    compare(toast.command.slice(-6), ["HEY\nInvoice #4021", "-i", "hey", "-p", "-r", "42"])
+    compare(processCommand(toast).slice(-6), ["HEY\nInvoice #4021", "-i", "hey", "-p", "-r", "42"])
 
     // A send that printed no id leaves the last one in place.
     toast.complete(1, "", "notify-send: no notification daemon")
@@ -477,7 +502,7 @@ TestCase {
 
     var toast = findToastProcess()
     verify(toast !== null)
-    compare(toast.command[6], Model.tuiOpenCommand(5511, 42, "Lunch on Thursday?"))
+    compare(processCommand(toast)[6], Model.tuiOpenCommand(5511, 42, "Lunch on Thursday?"))
   }
 
   function test_browser_notification_click_opens_the_message_url() {
@@ -489,7 +514,7 @@ TestCase {
 
     var toast = findToastProcess()
     verify(toast !== null)
-    compare(toast.command[6], "xdg-open 'https://app.hey.com/topics/5511'")
+    compare(processCommand(toast)[6], "xdg-open 'https://app.hey.com/topics/5511'")
   }
 
   function test_flipping_notify_leaves_the_watch_alone() {
@@ -498,7 +523,7 @@ TestCase {
 
     service.settings = { notify: true }
     verify(before.running)
-    compare(before.command, ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+    compare(processCommand(before), ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
     compare(service.watchRestartScheduled, false)
 
     // Off drops a toast that was about to go out.
@@ -656,7 +681,7 @@ TestCase {
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
     var screener = findHeyProcess("screener")
     verify(screener !== null)
-    compare(screener.command, ["hey", "screener", "list", "--count", "--json"])
+    compare(processCommand(screener), ["hey", "screener", "list", "--count", "--json"])
     screener.complete(0, '{"ok":true,"data":{"pending_count":3}}', "")
     compare(service.screenerCount, 3)
   }
