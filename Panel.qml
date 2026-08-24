@@ -448,7 +448,7 @@ Panel {
     }
     tooltipText: service.refreshing
       ? "Refreshing HEY email"
-      : (service.unreadCount === 1 ? "1 unread HEY email" : service.unreadCount + " unread HEY emails")
+      : (service.unreadCount === 1 ? "HEY · 1 new email" : "HEY · " + service.unreadCount + " new emails")
         + (service.connected ? " · live" : "")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
@@ -867,7 +867,7 @@ Panel {
                       Text {
                         Layout.fillWidth: true
                         text: Model.notificationMeta(notificationRow.modelData, root.nowMs, root.accountFilter === "" && service.accountCount > 1)
-                        color: root.dim
+                        color: Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
@@ -1003,8 +1003,8 @@ Panel {
             Toggle {
               id: notificationSetting
               width: parent.width
-              label: "New-mail notifications"
-              description: "Show a desktop toast when new mail reaches the Imbox."
+              label: "Notifications"
+              description: "Show notification toasts on this computer when new email arrives."
               checked: service.notify
               foreground: root.foreground
               accent: Color.accent
