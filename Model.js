@@ -129,8 +129,8 @@ function cliTooOld(stdout, stderr) {
 }
 
 // hey box imbox is the read: the panel's thread limit, and --account all once
-// the CLI has shown it knows accounts, so a persisted `hey accounts use`
-// filter cannot hide mail from the panel.
+// the CLI has shown it knows accounts, so a persisted default account
+// selection cannot hide mail from the panel.
 function boxCommand(limit, withAccountFilter) {
   var command = ["hey", "box", "imbox", "--limit", String(positiveInteger(limit, 50)), "--json"]
   if (withAccountFilter) command.splice(3, 0, "--account", "all")
@@ -142,7 +142,7 @@ function boxCommand(limit, withAccountFilter) {
 // setpriv --pdeathsig ties it to the shell, so a shell that dies takes its
 // watch along instead of leaving one behind per restart. It watches every box
 // — a move out of the Imbox is written in the box the thread went to — across
-// every account, so a persisted `hey accounts use` filter cannot hide changes
+// every account, so a persisted default account selection cannot hide changes
 // from the panel, and it asks for every event by name: `new` so each added
 // and updated line says whether the thread is new mail, `resync` so a box
 // that skipped ahead is re-read. A CLI that does not know `new` refuses the

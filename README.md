@@ -92,7 +92,7 @@ Demo mode runs the plugin against `demo/bin/hey`, which implements the same CLI 
 
 ## Live updates
 
-The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey --account all watch --events added,updated,deleted,new,resync` follows every HEY box of every linked account over HEY's cable — a persisted `hey accounts use` filter cannot hide changes from the panel — and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. A fixed 10-minute refresh also rechecks the Imbox and Screener count, covering missed events and data that does not arrive through the box stream.
+The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey --account all watch --events added,updated,deleted,new,resync` follows every HEY box of every linked account over HEY's cable — a persisted default account selection cannot hide changes from the panel — and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. A fixed 10-minute refresh also rechecks the Imbox and Screener count, covering missed events and data that does not arrive through the box stream.
 
 The bar logo's tooltip says `live` while the watch has said `ready` and not `disconnected` since. When the watch stops for a reason other than being signed out, the panel header says so and the plugin restarts it on a backoff (two seconds, doubling to a minute); signed out, it waits for you to sign in again.
 
@@ -115,7 +115,8 @@ The plugin runs these local CLI commands:
 ```text
 hey --version
 hey auth status --json
-hey accounts list --json
+hey account list --json
+hey accounts list --json  # HEY CLI 0.2.2 compatibility
 hey box imbox --account all --limit <count> --json
 hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json

@@ -41,7 +41,14 @@ TestCase {
   }
 
   function probeProcess() { return findProcess(["bash", "-c"]) }
-  function accountsProcess() { return findProcess(["hey", "accounts", "list"] ) }
+  function accountsProcess() { return findProcess(["hey", "account", "list"] ) }
+  function completeAccountCommandFallback() {
+    var process = accountsProcess()
+    process.complete(2, "", 'Error: unknown command "account" for "hey"')
+    compare(process.command, ["hey", "accounts", "list", "--json"])
+    verify(process.running)
+    return process
+  }
   function screenerProcess() { return findProcess(["hey", "screener", "list"]) }
   function notificationProcess() { return findProcess(["hey", "box", "imbox"]) }
   function readProcess() { return findProcess(["hey", "seen"]) }
@@ -147,9 +154,20 @@ TestCase {
     verify(notificationProcess().running)
   }
 
-  function test_older_cli_falls_back_to_the_merged_imbox() {
+  function test_released_cli_uses_the_plural_account_command() {
     completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
+    var process = completeAccountCommandFallback()
+    process.complete(0, '{"ok":true,"data":[{"id":"all","name":"All"},{"id":"1","name":"Personal"}]}', "")
+
+    compare(service.accounts, [{ id: "1", name: "Personal", order: 0 }])
+    compare(notificationProcess().command,
+      ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
+  }
+
+  function test_cli_without_account_commands_uses_the_merged_imbox() {
+    completeAuthenticatedProbe()
+    var process = completeAccountCommandFallback()
+    process.complete(2, "", 'Error: unknown command "accounts" for "hey"')
 
     compare(service.accounts, [])
     compare(notificationProcess().command,
@@ -185,7 +203,8 @@ TestCase {
 
   function test_notification_success_updates_items_and_unread_count() {
     completeAuthenticatedProbe()
-    accountsProcess().complete(2, "", 'Error: unknown command "accounts" for "hey"')
+    var process = completeAccountCommandFallback()
+    process.complete(2, "", 'Error: unknown command "accounts" for "hey"')
     notificationProcess().complete(0,
       '{"ok":true,"data":{"postings":['
       + '{"id":"seen","name":"Seen","active_at":"2025-02-02T00:00:00Z","seen":true},'

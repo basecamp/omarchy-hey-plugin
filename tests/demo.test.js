@@ -48,10 +48,14 @@ test("demo CLI fixtures follow the production HEY contracts", () => {
     const auth = successfulJson(["auth", "status", "--json"], stateDir)
     assert.equal(auth.data.authenticated, true)
 
-    const accountsResult = successfulJson(["accounts", "list", "--json"], stateDir)
-    const accounts = Model.parseAccounts(JSON.stringify(accountsResult))
-    assert.equal(accounts.ok, true)
-    assert.equal(accounts.accounts.length, 3)
+    let accounts
+    for (const command of ["account", "accounts"]) {
+      const accountsResult = successfulJson([command, "list", "--json"], stateDir)
+      const parsed = Model.parseAccounts(JSON.stringify(accountsResult))
+      assert.equal(parsed.ok, true)
+      assert.equal(parsed.accounts.length, 3)
+      if (command === "account") accounts = parsed
+    }
 
     const box = successfulJson([
       "box", "imbox", "--account", "all", "--limit", "50", "--json"
@@ -131,6 +135,8 @@ test("demo CLI rejects commands outside the plugin contract", () => {
     for (const args of [
       ["box", "feed", "--json"],
       ["box", "imbox", "--json"],
+      ["account", "list"],
+      ["account", "list", "--json", "unexpected"],
       ["accounts", "list"],
       ["accounts", "list", "--json", "unexpected"],
       ["nonsense", "watch"],
