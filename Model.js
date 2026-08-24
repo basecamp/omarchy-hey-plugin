@@ -80,15 +80,17 @@ function boundedCaptureCommand(command, stdoutLimit, stderrLimit) {
   var source = Array.isArray(command) ? command : []
   var stdoutBytes = positiveInteger(stdoutLimit, cliResponseByteLimit)
   var stderrBytes = positiveInteger(stderrLimit, cliErrorByteLimit)
-  return ["bash", "-o", "pipefail", "-c", boundedCaptureScript,
-    "hey-output-guard", String(stdoutBytes), String(stderrBytes)].concat(source)
+  return ["setpriv", "--pdeathsig", "TERM", "bash", "-o", "pipefail", "-c",
+    boundedCaptureScript, "hey-output-guard", String(stdoutBytes), String(stderrBytes)].concat(source)
 }
 
 function capturedCommandPayload(command) {
   var source = Array.isArray(command) ? command : []
-  if (source.length < 8 || source[0] !== "bash" || source[3] !== "-c"
-      || source[4] !== boundedCaptureScript || source[5] !== "hey-output-guard") return source.slice()
-  return source.slice(8)
+  if (source.length < 11 || source[0] !== "setpriv" || source[1] !== "--pdeathsig"
+      || source[2] !== "TERM" || source[3] !== "bash" || source[4] !== "-o"
+      || source[5] !== "pipefail" || source[6] !== "-c"
+      || source[7] !== boundedCaptureScript || source[8] !== "hey-output-guard") return source.slice()
+  return source.slice(11)
 }
 
 function exceedsUtf8ByteLimit(value, limit) {

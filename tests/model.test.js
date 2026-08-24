@@ -63,6 +63,7 @@ test("boundedCaptureCommand caps stdout and stderr at one detectable extra byte"
   ], 16, 8)
   const result = spawnSync(command[0], command.slice(1), { encoding: "utf8" })
 
+  assert.deepEqual(command.slice(0, 4), ["setpriv", "--pdeathsig", "TERM", "bash"])
   assert.equal(Buffer.byteLength(result.stdout), 17)
   assert.equal(Buffer.byteLength(result.stderr), 9)
   assert.equal(Model.exceedsUtf8ByteLimit(result.stdout, 16), true)
@@ -100,6 +101,53 @@ test("boundedCaptureCommand terminates the payload process group with its wrappe
     if (wrapper.exitCode === null) wrapper.kill("SIGKILL")
     if (payloadPid > 0) {
       try { process.kill(payloadPid, "SIGKILL") } catch {}
+    }
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("boundedCaptureCommand exits with its Quickshell-style parent", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hey-output-parent-"))
+  const guardPath = path.join(directory, "guard.pid")
+  const payloadPath = path.join(directory, "payload.pid")
+  const command = Model.boundedCaptureCommand([
+    "bash", "-c", 'printf "%s" "$$" > "$1"; exec sleep 30', "payload", payloadPath
+  ], 16, 8)
+  let guardPid = 0
+  let payloadPid = 0
+
+  try {
+    const launcher = spawnSync(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process")
+      const fs = require("node:fs")
+      const command = JSON.parse(process.env.GUARDED_COMMAND)
+      const child = spawn(command[0], command.slice(1), { stdio: "ignore" })
+      fs.writeFileSync(process.env.GUARD_PID_PATH, String(child.pid))
+      for (let i = 0; i < 100 && !fs.existsSync(process.env.PAYLOAD_PID_PATH); i++) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+      }
+      child.unref()
+    `], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GUARDED_COMMAND: JSON.stringify(command),
+        GUARD_PID_PATH: guardPath,
+        PAYLOAD_PID_PATH: payloadPath
+      }
+    })
+    assert.equal(launcher.status, 0, launcher.stderr)
+    guardPid = Number(fs.readFileSync(guardPath, "utf8"))
+    payloadPid = Number(fs.readFileSync(payloadPath, "utf8"))
+
+    for (let i = 0; i < 100 && (fs.existsSync(`/proc/${guardPid}`) || fs.existsSync(`/proc/${payloadPid}`)); i++) await delay(10)
+    assert.equal(fs.existsSync(`/proc/${guardPid}`), false, "the guard did not outlive its parent")
+    assert.equal(fs.existsSync(`/proc/${payloadPid}`), false, "the payload did not outlive its guard")
+  } finally {
+    for (const pid of [guardPid, payloadPid]) {
+      if (pid > 0) {
+        try { process.kill(pid, "SIGKILL") } catch {}
+      }
     }
     fs.rmSync(directory, { recursive: true, force: true })
   }

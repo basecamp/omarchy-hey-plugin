@@ -32,13 +32,16 @@ TestCase {
         || payload[0] === "omarchy-notification-send"
         || (payload[0] === "bash" && String(payload[2] || "").indexOf("hey") !== -1))) {
       verify(raw.length > payload.length, "HEY command has a producer-side output guard")
-      compare(raw[0], "bash")
-      compare(raw[1], "-o")
-      compare(raw[2], "pipefail")
-      compare(raw[3], "-c")
-      compare(raw[5], "hey-output-guard")
-      verify(Number(raw[6]) > 0)
-      verify(Number(raw[7]) > 0)
+      compare(raw[0], "setpriv")
+      compare(raw[1], "--pdeathsig")
+      compare(raw[2], "TERM")
+      compare(raw[3], "bash")
+      compare(raw[4], "-o")
+      compare(raw[5], "pipefail")
+      compare(raw[6], "-c")
+      compare(raw[8], "hey-output-guard")
+      verify(Number(raw[9]) > 0)
+      verify(Number(raw[10]) > 0)
     }
     return payload
   }
