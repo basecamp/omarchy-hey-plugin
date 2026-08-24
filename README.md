@@ -74,12 +74,7 @@ hey setup omarchy --remove
 omarchy plugin remove 37signals.hey --yes
 ```
 
-Plugin removal unloads HEY and removes its checkout. The HEY CLI package, its credential store, and the saved plugin settings in `~/.config/omarchy/shell.json` are separate and remain available for a future installation. To remove those optional pieces too, sign out before removing the CLI package:
-
-```bash
-hey auth logout
-omarchy pkg drop hey-cli
-```
+Plugin removal unloads HEY and removes its checkout. The HEY CLI package, its credential store, and the saved plugin settings in `~/.config/omarchy/shell.json` are separate and remain available for a future installation. Clear the stored HEY credentials with `hey auth logout`; if the CLI is no longer used elsewhere, remove its package separately through Omarchy's package manager.
 
 ## Usage
 
