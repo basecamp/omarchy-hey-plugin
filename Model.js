@@ -41,8 +41,100 @@ function setupPlan(installed, authenticated, ipcTarget) {
   return plan
 }
 
-function parseJson(raw) {
-  var text = String(raw || "").trim()
+// Every captured process has an independent producer-side byte ceiling. The
+// extra byte lets the consumer distinguish a response exactly at the limit
+// from one that was cut off. JSON entry points enforce the same ceiling again
+// before parsing.
+var cliResponseByteLimit = 1024 * 1024
+var cliErrorByteLimit = 64 * 1024
+var probeResponseByteLimit = 64 * 1024
+var watchOutputByteLimit = 4 * 1024 * 1024
+var watchLineByteLimit = 64 * 1024
+var maximumAccountCount = 32
+var maximumPostingCount = 50
+var maximumToastPostings = 50
+
+var remoteIdCharacterLimit = 64
+var remoteNameCharacterLimit = 160
+var remoteTitleCharacterLimit = 256
+var remoteExcerptCharacterLimit = 512
+var remoteUrlCharacterLimit = 2048
+var remoteTimestampCharacterLimit = 64
+var remoteTypeCharacterLimit = 64
+var remoteCountCharacterLimit = 20
+var remoteCountMaximum = 999999
+var remoteErrorCharacterLimit = 512
+var remoteHintCharacterLimit = 512
+var remoteCodeCharacterLimit = 64
+
+var boundedCaptureScript = "stdout_limit=$1; stderr_limit=$2; shift 2; child_pid=; "
+  + "stop_child() { trap - HUP INT TERM; "
+  + "if [ -n \"$child_pid\" ]; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; wait \"$child_pid\" 2>/dev/null || true; fi; "
+  + "exit 143; }; trap stop_child HUP INT TERM; "
+  + "setpriv --pdeathsig KILL setsid \"$@\" "
+  + "> >(head -c \"$((stdout_limit + 1))\") "
+  + "2> >(head -c \"$((stderr_limit + 1))\" >&2) & child_pid=$!; "
+  + "wait \"$child_pid\"; status=$?; child_pid=; exit \"$status\""
+
+function boundedCaptureCommand(command, stdoutLimit, stderrLimit) {
+  var source = Array.isArray(command) ? command : []
+  var stdoutBytes = positiveInteger(stdoutLimit, cliResponseByteLimit)
+  var stderrBytes = positiveInteger(stderrLimit, cliErrorByteLimit)
+  return ["bash", "-o", "pipefail", "-c", boundedCaptureScript,
+    "hey-output-guard", String(stdoutBytes), String(stderrBytes)].concat(source)
+}
+
+function capturedCommandPayload(command) {
+  var source = Array.isArray(command) ? command : []
+  if (source.length < 8 || source[0] !== "bash" || source[3] !== "-c"
+      || source[4] !== boundedCaptureScript || source[5] !== "hey-output-guard") return source.slice()
+  return source.slice(8)
+}
+
+function exceedsUtf8ByteLimit(value, limit) {
+  var text = String(value || "")
+  var maximum = positiveInteger(limit, cliResponseByteLimit)
+  var bytes = 0
+  for (var i = 0; i < text.length; i++) {
+    var code = text.charCodeAt(i)
+    if (code <= 0x7f) bytes += 1
+    else if (code <= 0x7ff) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff
+        && i + 1 < text.length
+        && text.charCodeAt(i + 1) >= 0xdc00
+        && text.charCodeAt(i + 1) <= 0xdfff) {
+      bytes += 4
+      i += 1
+    } else bytes += 3
+    if (bytes > maximum) return true
+  }
+  return false
+}
+
+function boundedString(value, limit) {
+  if (value === undefined || value === null || typeof value === "object") return ""
+  var text = String(value)
+  var maximum = positiveInteger(limit, remoteExcerptCharacterLimit)
+  if (text.length <= maximum) return text
+  text = text.substring(0, maximum)
+  var last = text.charCodeAt(text.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? text.substring(0, text.length - 1) : text
+}
+
+function boundedRemoteCount(value, fallback) {
+  if (value === undefined || value === null || typeof value === "object") return fallback
+  var text = String(value).trim()
+  if (text.length === 0 || text.length > remoteCountCharacterLimit || !/^\d+$/.test(text)) return fallback
+  var count = parseInt(text, 10)
+  return isFinite(count) ? Math.min(remoteCountMaximum, count) : fallback
+}
+
+function parseJson(raw, byteLimit) {
+  var source = String(raw || "")
+  if (exceedsUtf8ByteLimit(source, byteLimit || cliResponseByteLimit)) {
+    return { ok: false, error: "The HEY CLI response exceeded its size limit", code: "" }
+  }
+  var text = source.trim()
   if (text === "") return { ok: false, error: "The HEY CLI returned no data", code: "" }
 
   try {
@@ -51,9 +143,9 @@ function parseJson(raw) {
     if (parsed.ok === false) {
       return {
         ok: false,
-        error: cleanText(parsed.error || parsed.message || "The HEY CLI request failed"),
-        code: String(parsed.code || ""),
-        hint: cleanText(parsed.hint || "")
+        error: cleanText(parsed.error || parsed.message || "The HEY CLI request failed", remoteErrorCharacterLimit),
+        code: boundedString(parsed.code || "", remoteCodeCharacterLimit),
+        hint: cleanText(parsed.hint || "", remoteHintCharacterLimit)
       }
     }
     return { ok: true, value: parsed }
@@ -67,14 +159,15 @@ function parseJson(raw) {
 // CLI's code for a signed-out state; `auth_required` is kept for older
 // builds.
 function parseFailure(stdout, stderr) {
-  var text = String(stderr || "").trim() !== "" ? stderr : stdout
-  var result = parseJson(text)
+  var hasStderr = String(stderr || "").trim() !== ""
+  var text = hasStderr ? stderr : stdout
+  var result = parseJson(text, hasStderr ? cliErrorByteLimit : cliResponseByteLimit)
   if (result.ok) return { ok: false, error: "The HEY CLI request failed", code: "", hint: "" }
   return result
 }
 
 function isAuthError(code) {
-  var value = String(code || "")
+  var value = boundedString(code || "", remoteCodeCharacterLimit)
   return value === "auth" || value === "auth_required"
 }
 
@@ -87,16 +180,22 @@ var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (
 // JSON envelope once its output is a pipe). bash always exists, so the
 // process always exits; a bare `hey` would never report an exit when the
 // binary is missing.
-var probeCommand = ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey --version 2>/dev/null | head -n 1; hey auth status --json"]
+var probeCommand = boundedCaptureCommand(
+  ["bash", "-c", "command -v hey >/dev/null 2>&1 || { echo missing; exit 0; }; hey --version 2>/dev/null | head -n 1; hey auth status --json"],
+  probeResponseByteLimit, cliErrorByteLimit)
 
 // parseProbe splits the probe's output into the version it read and the auth
 // status behind it. No version line — a build whose `hey version` failed, or a
 // test feeding the status alone — leaves the version unknown, not wrong.
 function parseProbe(text) {
   var raw = String(text || "")
+  if (exceedsUtf8ByteLimit(raw, probeResponseByteLimit)) return { version: "", status: "" }
   var match = raw.match(/^\s*hey version (\S+)[^\n]*\n?/)
   if (!match) return { version: "", status: raw }
-  return { version: match[1], status: raw.substring(match[0].length) }
+  return {
+    version: boundedString(match[1], remoteTypeCharacterLimit),
+    status: raw.substring(match[0].length)
+  }
 }
 
 // cliVersionTooOld says whether a version the probe read is older than the
@@ -115,7 +214,7 @@ function cliVersionTooOld(version) {
 }
 
 function parseSemver(version) {
-  var match = String(version || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)/)
+  var match = boundedString(version || "", remoteTypeCharacterLimit).trim().match(/^v?(\d+)\.(\d+)\.(\d+)/)
   return match ? [parseInt(match[1], 10), parseInt(match[2], 10), parseInt(match[3], 10)] : null
 }
 
@@ -125,16 +224,18 @@ function parseSemver(version) {
 // command. HEY CLI 0.2.2 adds topic deep links for terminal clicks. The plugin only
 // ever passes fixed flags, so any unknown one means the CLI is too old.
 function cliTooOld(stdout, stderr) {
-  return /unknown (command|flag|event)/i.test(String(stderr || "") + String(stdout || ""))
+  var errorText = boundedString(stderr || "", remoteErrorCharacterLimit)
+  var outputText = boundedString(stdout || "", remoteErrorCharacterLimit)
+  return /unknown (command|flag|event)/i.test(errorText + outputText)
 }
 
 // hey box imbox is the read: the panel's thread limit, and --account all once
 // the CLI has shown it knows accounts, so a persisted default account
 // selection cannot hide mail from the panel.
 function boxCommand(limit, withAccountFilter) {
-  var command = ["hey", "box", "imbox", "--limit", String(positiveInteger(limit, 50)), "--json"]
+  var command = ["hey", "box", "imbox", "--limit", String(Math.min(maximumPostingCount, positiveInteger(limit, maximumPostingCount))), "--json"]
   if (withAccountFilter) command.splice(3, 0, "--account", "all")
-  return command
+  return boundedCaptureCommand(command, cliResponseByteLimit, cliErrorByteLimit)
 }
 
 // hey watch is the wake-up: it follows every box over HEY's cable and prints
@@ -148,7 +249,9 @@ function boxCommand(limit, withAccountFilter) {
 // that skipped ahead is re-read. A CLI that does not know `new` refuses the
 // command up front instead of running a watch that never says it.
 function watchCommand() {
-  return ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"]
+  return boundedCaptureCommand(
+    ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"],
+    watchOutputByteLimit, cliErrorByteLimit)
 }
 
 // watchLine reads one line from hey watch: its change — added, updated or
@@ -157,22 +260,42 @@ function watchCommand() {
 // posting itself. A blank line is nothing; a line that is not JSON — there are
 // none, but stdout is stdout — counts as a change.
 function watchLine(line) {
-  var text = String(line || "").trim()
-  if (text === "") return null
+  var source = String(line || "")
   var event = { change: "unknown", isNew: false, boxKind: "", boxName: "", posting: null }
+  if (exceedsUtf8ByteLimit(source, watchLineByteLimit)) return event
+  var text = source.trim()
+  if (text === "") return null
   try {
     var value = JSON.parse(text)
     if (!value || typeof value.change !== "string") return event
-    event.change = value.change
+    event.change = boundedString(value.change, remoteTypeCharacterLimit)
     event.isNew = value["new"] === true
     if (value.box && typeof value.box === "object") {
-      event.boxKind = String(value.box.kind || "")
-      event.boxName = cleanText(value.box.name || "")
+      event.boxKind = boundedString(value.box.kind || "", remoteTypeCharacterLimit)
+      event.boxName = cleanText(value.box.name || "", remoteNameCharacterLimit)
     }
-    if (value.posting && typeof value.posting === "object") event.posting = value.posting
+    if (value.posting && typeof value.posting === "object") event.posting = boundedWatchPosting(value.posting)
     return event
   } catch (error) {
     return event
+  }
+}
+
+function boundedWatchPosting(value) {
+  var posting = value && typeof value === "object" ? value : {}
+  var creator = posting.creator && typeof posting.creator === "object" ? posting.creator : {}
+  return {
+    id: boundedString(posting.id || "", remoteIdCharacterLimit),
+    name: cleanText(posting.name || "", remoteTitleCharacterLimit),
+    summary: cleanText(posting.summary || "", remoteExcerptCharacterLimit),
+    app_url: boundedString(posting.app_url || "", remoteUrlCharacterLimit),
+    url: boundedString(posting.url || "", remoteUrlCharacterLimit),
+    account_id: boundedString(posting.account_id || "", remoteIdCharacterLimit),
+    alternative_sender_name: cleanText(posting.alternative_sender_name || "", remoteNameCharacterLimit),
+    creator: {
+      name: cleanText(creator.name || "", remoteNameCharacterLimit),
+      email_address: cleanText(creator.email_address || "", remoteNameCharacterLimit)
+    }
   }
 }
 
@@ -190,14 +313,14 @@ var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey he
 var heyWebUrl = "https://app.hey.com"
 
 function topicIdFromUrl(value) {
-  var match = String(value || "").match(/\/topics\/(\d+)(?:[/?#]|$)/)
+  var match = boundedString(value, remoteUrlCharacterLimit).match(/\/topics\/(\d+)(?:[/?#]|$)/)
   if (!match) return 0
   var id = parseInt(match[1], 10)
   return isFinite(id) && id > 0 ? id : 0
 }
 
 function positiveId(value) {
-  var id = parseInt(String(value || ""), 10)
+  var id = parseInt(boundedString(value, remoteIdCharacterLimit), 10)
   return isFinite(id) && id > 0 ? id : 0
 }
 
@@ -208,7 +331,7 @@ function tuiRemoteCommand(topicId, accountId, title) {
   var account = positiveId(accountId)
   if (account > 0) command.push("--account", String(account))
   command.push("tui", "--instance", "omarchy", "--topic", String(topic))
-  var topicTitle = cleanText(title)
+  var topicTitle = cleanText(title, remoteTitleCharacterLimit)
   if (topicTitle !== "") command.push("--topic-title", topicTitle)
   command.push("--remote")
   return command
@@ -241,7 +364,7 @@ function tuiOpenCommand(topicId, accountId, title) {
 // HEY posting URLs can be absolute or app-relative. Web actions stay on the
 // canonical HEY origin, with HEY's home page as the safe destination.
 function heyBrowserUrl(value) {
-  var url = String(value || "").trim()
+  var url = boundedString(value, remoteUrlCharacterLimit).trim()
   if (/^https:\/\/app\.hey\.com(?:[/?#]|$)/i.test(url)) return url
   if (url.charAt(0) === "/") return heyWebUrl + url
   return heyWebUrl
@@ -269,17 +392,17 @@ function newImboxMail(event) {
 
 function postingSender(posting) {
   var creator = posting && posting.creator && typeof posting.creator === "object" ? posting.creator : {}
-  return cleanText(posting.alternative_sender_name || creator.name || creator.email_address || "")
+  return cleanText(posting.alternative_sender_name || creator.name || creator.email_address || "", remoteNameCharacterLimit)
 }
 
 function postingSubject(posting) {
-  return cleanText(posting.name || posting.summary || "")
+  return cleanText(posting.name || posting.summary || "", remoteTitleCharacterLimit)
 }
 
 // notificationPreview provides one concise body line. HTML breaks and escaped
 // newlines establish the first line, and long previews end with an ellipsis.
 function notificationPreview(value, limit) {
-  var lines = String(value || "")
+  var lines = boundedString(value, remoteExcerptCharacterLimit)
     .replace(/\\[nr]/g, "\n")
     .replace(/<br\s*\/?\s*>|<\/p\s*>/gi, "\n")
     .split(/\r?\n/)
@@ -297,7 +420,7 @@ function notificationPreview(value, limit) {
 // the first concise line of the message. A burst uses its count as the subject
 // and the first senders as its description.
 function composeMailToast(boxName, postings) {
-  var fresh = Array.isArray(postings) ? postings : []
+  var fresh = Array.isArray(postings) ? postings.slice(0, maximumToastPostings) : []
   if (fresh.length === 1) {
     var posting = fresh[0]
     var subject = postingSubject(posting)
@@ -322,7 +445,7 @@ function composeMailToast(boxName, postings) {
     senders.push(postingSender(fresh[i]))
   }
   return {
-    headline: toastAppName + "\n" + fresh.length + " new in " + (cleanText(boxName) || "Imbox"),
+    headline: toastAppName + "\n" + fresh.length + " new in " + (cleanText(boxName, remoteNameCharacterLimit) || "Imbox"),
     description: notificationPreview(senders.join(", ")),
     targetUrl: heyWebUrl,
     topicId: 0,
@@ -336,7 +459,7 @@ function composeMailToast(boxName, postings) {
 // summary can start with one. A word joiner is invisible on screen but makes
 // the argument a plain positional.
 function notificationText(text) {
-  var value = String(text || "")
+  var value = boundedString(text, remoteExcerptCharacterLimit)
   return value.charAt(0) === "-" ? "\u2060" + value : value
 }
 
@@ -370,14 +493,21 @@ function toastCommand(headline, description, replaceId, clickAction, targetUrl, 
 // --count took over from the command's own flag; older CLIs answer the envelope
 // with `data.pending_count`. Both are a count.
 function parseScreenerCount(raw) {
-  var text = String(raw || "").trim()
-  if (/^\d+$/.test(text)) return { ok: true, count: parseInt(text, 10) }
+  var source = String(raw || "")
+  if (exceedsUtf8ByteLimit(source, cliResponseByteLimit)) return { ok: false, error: "The HEY CLI response exceeded its size limit", count: 0 }
+  var text = source.trim()
+  if (/^\d+$/.test(text)) {
+    var bareCount = boundedRemoteCount(text, -1)
+    return bareCount < 0
+      ? { ok: false, error: "Could not parse the HEY Screener count", count: 0 }
+      : { ok: true, count: bareCount }
+  }
   var result = parseJson(raw)
   if (!result.ok) return { ok: false, error: result.error, count: 0 }
   var data = result.value.data && typeof result.value.data === "object" ? result.value.data : {}
-  var count = parseInt(String(data.pending_count === undefined ? "" : data.pending_count), 10)
-  if (!isFinite(count)) return { ok: false, error: "Could not parse the HEY Screener count", count: 0 }
-  return { ok: true, error: "", count: Math.max(0, count) }
+  var count = boundedRemoteCount(data.pending_count, -1)
+  if (count < 0) return { ok: false, error: "Could not parse the HEY Screener count", count: 0 }
+  return { ok: true, error: "", count: count }
 }
 
 function parseAccounts(raw) {
@@ -386,14 +516,15 @@ function parseAccounts(raw) {
 
   var data = Array.isArray(result.value.data) ? result.value.data : []
   var accounts = []
-  for (var i = 0; i < data.length; i++) {
+  var inputCount = Math.min(data.length, maximumAccountCount + 1)
+  for (var i = 0; i < inputCount && accounts.length < maximumAccountCount; i++) {
     var account = data[i] || {}
-    var id = String(account.id || "").trim()
+    var id = boundedString(account.id || "", remoteIdCharacterLimit).trim()
     // The CLI includes an "all" pseudo-account for its filter list.
     if (id === "" || id === "all") continue
     accounts.push({
       id: id,
-      name: cleanText(account.name || ("Account " + id)),
+      name: cleanText(account.name || ("Account " + id), remoteNameCharacterLimit),
       order: accounts.length
     })
   }
@@ -407,58 +538,61 @@ function parseNotifications(raw, limit, accounts) {
 
   var accountsById = {}
   var source = Array.isArray(accounts) ? accounts : []
-  for (var a = 0; a < source.length; a++) {
-    accountsById[String(source[a].id || "")] = source[a]
+  var accountCount = Math.min(source.length, maximumAccountCount)
+  for (var a = 0; a < accountCount; a++) {
+    var sourceId = boundedString(source[a].id || "", remoteIdCharacterLimit)
+    accountsById[sourceId] = source[a]
   }
 
   var data = result.value.data && typeof result.value.data === "object" ? result.value.data : {}
   var postings = Array.isArray(data.postings) ? data.postings : []
   var items = []
-  for (var i = 0; i < postings.length; i++) {
+  var count = Math.min(maximumPostingCount, positiveInteger(limit, maximumPostingCount))
+  var postingCount = Math.min(postings.length, maximumPostingCount)
+  for (var i = 0; i < postingCount; i++) {
     var item = normalizeNotification(postings[i], accountsById)
     if (item) items.push(item)
   }
 
   items.sort(compareNotifications)
-  var count = positiveInteger(limit, 50)
   if (items.length > count) items = items.slice(0, count)
   return { ok: true, error: "", items: items }
 }
 
 function normalizeNotification(value, accountsById) {
-  var posting = value || {}
-  var id = String(posting.id || "").trim()
+  var posting = value && typeof value === "object" ? value : {}
+  var id = boundedString(posting.id || "", remoteIdCharacterLimit).trim()
   if (id === "") return null
 
-  var timestamp = String(posting.active_at || posting.updated_at || posting.created_at || "")
+  var timestamp = boundedString(posting.active_at || posting.updated_at || posting.created_at || "", remoteTimestampCharacterLimit)
   var parsedTime = Date.parse(timestamp)
   if (!isFinite(parsedTime)) parsedTime = 0
   var creator = posting.creator && typeof posting.creator === "object" ? posting.creator : {}
-  var creatorName = cleanText(creator.name || posting.alternative_sender_name || "")
-  var accountId = String(posting.account_id || "")
+  var creatorName = cleanText(creator.name || posting.alternative_sender_name || "", remoteNameCharacterLimit)
+  var accountId = boundedString(posting.account_id || "", remoteIdCharacterLimit)
   var account = (accountsById && accountsById[accountId]) || {}
 
   return {
     id: id,
     accountId: accountId,
-    accountName: cleanText(account.name || ""),
+    accountName: cleanText(account.name || "", remoteNameCharacterLimit),
     accountOrder: Number(account.order || 0),
-    title: cleanText(posting.name || "HEY email"),
-    excerpt: cleanText(posting.summary || posting.note || ""),
+    title: cleanText(posting.name || "HEY email", remoteTitleCharacterLimit),
+    excerpt: cleanText(posting.summary || posting.note || "", remoteExcerptCharacterLimit),
     project: "",
     creator: creatorName,
-    initials: cleanText(creator.initials || "") || computeInitials(creatorName),
-    type: cleanText(posting.entry_kind || posting.kind || "email"),
+    initials: cleanText(creator.initials || "", remoteTypeCharacterLimit) || computeInitials(creatorName),
+    type: cleanText(posting.entry_kind || posting.kind || "email", remoteTypeCharacterLimit),
     timestamp: timestamp,
     timestampMs: parsedTime,
-    url: String(posting.app_url || ""),
+    url: boundedString(posting.app_url || "", remoteUrlCharacterLimit),
     unread: posting.seen !== true,
-    unreadCount: positiveInteger(posting.visible_entry_count, 1)
+    unreadCount: boundedRemoteCount(posting.visible_entry_count, 1)
   }
 }
 
 function computeInitials(name) {
-  var words = cleanText(name).split(" ")
+  var words = cleanText(name, remoteNameCharacterLimit).split(" ")
   var initials = ""
   for (var i = 0; i < words.length && initials.length < 2; i++) {
     var letter = words[i].charAt(0)
@@ -473,21 +607,23 @@ function compareNotifications(a, b) {
   if (timeDifference !== 0) return timeDifference
   var accountDifference = Number(a.accountOrder || 0) - Number(b.accountOrder || 0)
   if (accountDifference !== 0) return accountDifference
-  return String(a.id || "").localeCompare(String(b.id || ""))
+  return boundedString(a.id || "", remoteIdCharacterLimit).localeCompare(
+    boundedString(b.id || "", remoteIdCharacterLimit))
 }
 
 function sortNotifications(items) {
-  var sorted = Array.isArray(items) ? items.slice() : []
+  var sorted = Array.isArray(items) ? items.slice(0, maximumPostingCount) : []
   sorted.sort(compareNotifications)
   return sorted
 }
 
 function filterNotifications(items, accountId, state) {
-  var source = Array.isArray(items) ? items : []
-  var selectedAccount = String(accountId || "")
-  var selectedState = String(state || "all")
+  var source = Array.isArray(items) ? items.slice(0, maximumPostingCount) : []
+  var selectedAccount = boundedString(accountId || "", remoteIdCharacterLimit)
+  var selectedState = boundedString(state || "all", remoteTypeCharacterLimit)
   return source.filter(function(item) {
-    if (selectedAccount !== "" && String(item.accountId || "") !== selectedAccount) return false
+    if (selectedAccount !== ""
+        && boundedString(item.accountId || "", remoteIdCharacterLimit) !== selectedAccount) return false
     if (selectedState === "unread") return item.unread === true
     if (selectedState === "previous") return item.unread !== true
     return true
@@ -496,13 +632,16 @@ function filterNotifications(items, accountId, state) {
 
 function accountFilterOptions(accounts) {
   var options = [{ value: "", label: "All accounts" }]
-  var source = Array.isArray(accounts) ? accounts.slice() : []
+  var source = Array.isArray(accounts) ? accounts.slice(0, maximumAccountCount) : []
   source.sort(function(a, b) {
-    return cleanText(a.name || "HEY").toLowerCase().localeCompare(
-      cleanText(b.name || "HEY").toLowerCase())
+    return cleanText(a.name || "HEY", remoteNameCharacterLimit).toLowerCase().localeCompare(
+      cleanText(b.name || "HEY", remoteNameCharacterLimit).toLowerCase())
   })
   for (var i = 0; i < source.length; i++) {
-    options.push({ value: String(source[i].id || ""), label: cleanText(source[i].name || "HEY") })
+    options.push({
+      value: boundedString(source[i].id || "", remoteIdCharacterLimit),
+      label: cleanText(source[i].name || "HEY", remoteNameCharacterLimit)
+    })
   }
   return options
 }
@@ -521,7 +660,7 @@ var AVATAR_COLOR_KEYS = [
 
 function themeAvatarPalette(raw) {
   var byKey = {}
-  var lines = String(raw || "").split("\n")
+  var lines = boundedString(raw, cliErrorByteLimit).split("\n")
   for (var i = 0; i < lines.length; i++) {
     var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
     if (match) byKey[match[1]] = match[2]
@@ -541,7 +680,7 @@ function themeAvatarPalette(raw) {
 }
 
 function nameHash(text) {
-  var value = String(text || "")
+  var value = boundedString(text, remoteNameCharacterLimit)
   var hash = 5381
   for (var i = 0; i < value.length; i++) hash = ((hash * 33) ^ value.charCodeAt(i)) >>> 0
   return hash
@@ -552,7 +691,7 @@ function nameHash(text) {
 function avatarColorIndex(name, count) {
   var total = Number(count || 0)
   if (!isFinite(total) || total <= 0) return 0
-  return nameHash(cleanText(name)) % total
+  return nameHash(cleanText(name, remoteNameCharacterLimit)) % total
 }
 
 function notificationBadgeText(item, hovered) {
@@ -560,9 +699,9 @@ function notificationBadgeText(item, hovered) {
   return String(Math.max(1, (item && item.unreadCount) || 0))
 }
 
-function cleanText(value) {
-  if (value === undefined || value === null || typeof value === "object") return ""
-  return String(value)
+function cleanText(value, limit) {
+  var maximum = positiveInteger(limit, remoteExcerptCharacterLimit)
+  var text = boundedString(value, maximum)
     .replace(/\\[nrt]/g, " ")
     .replace(/<br\s*\/?\s*>/gi, " ")
     .replace(/<[^>]*>/g, " ")
@@ -574,6 +713,7 @@ function cleanText(value) {
     .replace(/&quot;/gi, "\"")
     .replace(/\s+/g, " ")
     .trim()
+  return boundedString(text, maximum)
 }
 
 function positiveInteger(value, fallback) {
@@ -604,8 +744,8 @@ function notificationMeta(item, nowMs, showAccount) {
   if (!item) return ""
   var parts = []
   var age = notificationTime(item.timestampMs, nowMs)
-  var creator = cleanText(item.creator || "")
-  var account = cleanText(item.accountName || "")
+  var creator = cleanText(item.creator || "", remoteNameCharacterLimit)
+  var account = cleanText(item.accountName || "", remoteNameCharacterLimit)
   if (age !== "") parts.push(age)
   if (creator !== "") parts.push(creator)
   if (showAccount === true && account !== "") parts.push(account)
@@ -617,6 +757,31 @@ if (typeof module !== "undefined") {
     setupLockPath: setupLockPath,
     setupLaunchCommand: setupLaunchCommand,
     setupPlan: setupPlan,
+    boundedCaptureCommand: boundedCaptureCommand,
+    capturedCommandPayload: capturedCommandPayload,
+    exceedsUtf8ByteLimit: exceedsUtf8ByteLimit,
+    boundedString: boundedString,
+    boundedRemoteCount: boundedRemoteCount,
+    cliResponseByteLimit: cliResponseByteLimit,
+    cliErrorByteLimit: cliErrorByteLimit,
+    probeResponseByteLimit: probeResponseByteLimit,
+    watchOutputByteLimit: watchOutputByteLimit,
+    watchLineByteLimit: watchLineByteLimit,
+    maximumAccountCount: maximumAccountCount,
+    maximumPostingCount: maximumPostingCount,
+    maximumToastPostings: maximumToastPostings,
+    remoteIdCharacterLimit: remoteIdCharacterLimit,
+    remoteNameCharacterLimit: remoteNameCharacterLimit,
+    remoteTitleCharacterLimit: remoteTitleCharacterLimit,
+    remoteExcerptCharacterLimit: remoteExcerptCharacterLimit,
+    remoteUrlCharacterLimit: remoteUrlCharacterLimit,
+    remoteTimestampCharacterLimit: remoteTimestampCharacterLimit,
+    remoteTypeCharacterLimit: remoteTypeCharacterLimit,
+    remoteCountCharacterLimit: remoteCountCharacterLimit,
+    remoteCountMaximum: remoteCountMaximum,
+    remoteErrorCharacterLimit: remoteErrorCharacterLimit,
+    remoteHintCharacterLimit: remoteHintCharacterLimit,
+    remoteCodeCharacterLimit: remoteCodeCharacterLimit,
     parseJson: parseJson,
     parseFailure: parseFailure,
     isAuthError: isAuthError,

@@ -73,7 +73,7 @@ test("parseJson accepts successful objects and reports CLI errors", () => {
   })
 })
 
-test("parseJson rejects empty, malformed, and primitive responses", () => {
+test("parseJson rejects empty, malformed, primitive, and oversized responses", () => {
   assert.deepEqual(Model.parseJson(""), {
     ok: false, error: "The HEY CLI returned no data", code: ""
   })
@@ -89,6 +89,11 @@ test("parseJson rejects empty, malformed, and primitive responses", () => {
   assert.deepEqual(Model.parseJson("42"), {
     ok: false, error: "The HEY CLI returned invalid data", code: ""
   })
+  assert.deepEqual(Model.parseJson('{"ok":true}', 4), {
+    ok: false, error: "The HEY CLI response exceeded its size limit", code: ""
+  })
+  assert.equal(Model.exceedsUtf8ByteLimit("😀", 3), true)
+  assert.equal(Model.exceedsUtf8ByteLimit("😀", 4), false)
 })
 
 test("parseAccounts removes pseudo-accounts and normalizes names and order", () => {
@@ -107,6 +112,18 @@ test("parseAccounts removes pseudo-accounts and normalizes names and order", () 
       { id: "2", name: "Account 2", order: 1 }
     ]
   })
+})
+
+test("parseAccounts caps its source array and every stored field", () => {
+  const source = Array.from({ length: Model.maximumAccountCount + 20 }, (_, index) => ({
+    id: String(index).repeat(100),
+    name: "N".repeat(500)
+  }))
+  const parsed = Model.parseAccounts(response(source))
+
+  assert.equal(parsed.accounts.length, Model.maximumAccountCount)
+  assert.ok(parsed.accounts.every(account => account.id.length <= Model.remoteIdCharacterLimit))
+  assert.ok(parsed.accounts.every(account => account.name.length <= Model.remoteNameCharacterLimit))
 })
 
 test("parseAccounts returns an empty list for CLI errors or missing data", () => {
@@ -183,6 +200,35 @@ test("parseNotifications sorts unread first and applies a positive limit", () =>
     Model.parseNotifications(response({ postings }), 2, []).items.map(item => item.id),
     ["unread-new", "unread-old"]
   )
+})
+
+test("parseNotifications caps its source array and every stored remote field", () => {
+  const postings = Array.from({ length: Model.maximumPostingCount + 20 }, (_, index) => posting({
+    id: String(index).repeat(100),
+    account_id: "a".repeat(100),
+    name: "T".repeat(500),
+    summary: "E".repeat(1000),
+    creator: { name: "C".repeat(500), initials: "I".repeat(100) },
+    entry_kind: "K".repeat(100),
+    visible_entry_count: "9".repeat(Model.remoteCountCharacterLimit + 1),
+    active_at: "D".repeat(100),
+    app_url: "/" + "u".repeat(3000)
+  }))
+  const parsed = Model.parseNotifications(response({ postings }), Model.maximumPostingCount, [])
+
+  assert.equal(parsed.items.length, Model.maximumPostingCount)
+  for (const item of parsed.items) {
+    assert.ok(item.id.length <= Model.remoteIdCharacterLimit)
+    assert.ok(item.accountId.length <= Model.remoteIdCharacterLimit)
+    assert.ok(item.title.length <= Model.remoteTitleCharacterLimit)
+    assert.ok(item.excerpt.length <= Model.remoteExcerptCharacterLimit)
+    assert.ok(item.creator.length <= Model.remoteNameCharacterLimit)
+    assert.ok(item.initials.length <= Model.remoteTypeCharacterLimit)
+    assert.ok(item.type.length <= Model.remoteTypeCharacterLimit)
+    assert.ok(item.timestamp.length <= Model.remoteTimestampCharacterLimit)
+    assert.ok(item.url.length <= Model.remoteUrlCharacterLimit)
+    assert.equal(item.unreadCount, 1)
+  }
 })
 
 test("parseNotifications reports malformed payloads and accepts missing postings", () => {
@@ -267,8 +313,9 @@ test("notificationBadgeText shows a count or close glyph", () => {
   assert.equal(Model.notificationBadgeText({ unreadCount: 4 }, true), "󰅖")
 })
 
-test("cleanText removes markup, decodes entities, and rejects objects", () => {
+test("cleanText removes markup, decodes entities, rejects objects, and bounds work", () => {
   assert.equal(Model.cleanText(` A\\n<br> B &nbsp; &lt;x&gt; &amp; &#39;y&#39; &quot;`), "A B <x> & 'y' \"")
+  assert.equal(Model.cleanText("x".repeat(1000), 10), "x".repeat(10))
   assert.equal(Model.cleanText({ text: "no" }), "")
   assert.equal(Model.cleanText(null), "")
 })

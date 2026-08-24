@@ -123,7 +123,8 @@ Item {
   }
 
   function conciseError(value, fallback) {
-    var text = String(value || fallback || "HEY request failed").replace(/\s+/g, " ").trim()
+    var source = Model.boundedString(value || fallback || "HEY request failed", Model.remoteErrorCharacterLimit)
+    var text = source.replace(/\s+/g, " ").trim()
     return text.length > 180 ? text.substring(0, 177) + "…" : text
   }
 
@@ -209,7 +210,8 @@ Item {
     _accountsOutput = ""
     _accountsError = ""
     _accountListCommandIndex = 0
-    accountsProcess.command = accountListCommands[_accountListCommandIndex]
+    accountsProcess.command = Model.boundedCaptureCommand(
+      accountListCommands[_accountListCommandIndex], Model.cliResponseByteLimit, Model.cliErrorByteLimit)
     _screenerOutput = ""
     _screenerError = ""
     accountsProcess.running = true
@@ -217,7 +219,8 @@ Item {
   }
 
   function accountsCommandUnavailable(stdout, stderr, commandName) {
-    var raw = String(stdout || "") + " " + String(stderr || "")
+    var raw = Model.boundedString(stdout || "", Model.remoteErrorCharacterLimit) + " "
+      + Model.boundedString(stderr || "", Model.remoteErrorCharacterLimit)
     var failure = Model.parseFailure(stdout, stderr)
     var text = (raw + " " + String(failure.error || "")).toLowerCase()
     var name = String(commandName || "").toLowerCase()
@@ -287,8 +290,13 @@ Item {
   }
 
   function collectToast(event) {
-    var queue = _toastQueue.slice()
-    queue.push({ boxName: event.boxName, posting: event.posting })
+    var queue = _toastQueue.slice(0, Model.maximumToastPostings)
+    if (queue.length < Model.maximumToastPostings) {
+      queue.push({
+        boxName: Model.cleanText(event.boxName, Model.remoteNameCharacterLimit),
+        posting: event.posting
+      })
+    }
     _toastQueue = queue
     toastDebounce.interval = toastDebounceMs
     toastDebounce.restart()
@@ -305,13 +313,15 @@ Item {
       return
     }
     var postings = []
-    for (var i = 0; i < _toastQueue.length; i++) postings.push(_toastQueue[i].posting)
+    for (var i = 0; i < _toastQueue.length && i < Model.maximumToastPostings; i++) postings.push(_toastQueue[i].posting)
     var toast = Model.composeMailToast(_toastQueue[0].boxName, postings)
     _toastQueue = []
     _toastOutput = ""
-    toastProcess.command = Model.toastCommand(toast.headline, toast.description,
-      Model.replaceableToastId(_toastId, _toastAtMs, Date.now()), openAction,
-      toast.targetUrl, toast.topicId, toast.accountId, toast.title)
+    toastProcess.command = Model.boundedCaptureCommand(
+      Model.toastCommand(toast.headline, toast.description,
+        Model.replaceableToastId(_toastId, _toastAtMs, Date.now()), openAction,
+        toast.targetUrl, toast.topicId, toast.accountId, toast.title),
+      Model.cliErrorByteLimit, Model.cliErrorByteLimit)
     toastProcess.running = true
   }
 
@@ -432,7 +442,8 @@ Item {
       command.push("--account", String(_readingNotification.accountId))
     }
     command.push("--json")
-    readProcess.command = command
+    readProcess.command = Model.boundedCaptureCommand(
+      command, Model.cliResponseByteLimit, Model.cliErrorByteLimit)
     readProcess.running = true
   }
 
@@ -514,7 +525,9 @@ Item {
     // Only the last line matters: the CLI's error envelope when the watch
     // exits. A collector would hold a long run's warnings in memory for days.
     stderr: SplitParser {
-      onRead: function(data) { root._watchLastStderr = String(data) }
+      onRead: function(data) {
+        root._watchLastStderr = Model.boundedString(data, Model.remoteErrorCharacterLimit)
+      }
     }
     onExited: function(exitCode, exitStatus) { root.watchExited(exitCode) }
   }
@@ -558,7 +571,9 @@ Item {
   Process {
     id: accountsProcess
     running: false
-    command: root.accountListCommands[root._accountListCommandIndex]
+    command: Model.boundedCaptureCommand(
+      root.accountListCommands[root._accountListCommandIndex],
+      Model.cliResponseByteLimit, Model.cliErrorByteLimit)
     stdout: StdioCollector {
       id: accountsStdout
       waitForEnd: true
@@ -577,12 +592,15 @@ Item {
         return
       }
       if (exitCode !== 0) {
-        if (root.accountsCommandUnavailable(stdout, stderr, accountsProcess.command[1])) {
+        if (root.accountsCommandUnavailable(stdout, stderr,
+            root.accountListCommands[root._accountListCommandIndex][1])) {
           if (root._accountListCommandIndex + 1 < root.accountListCommands.length) {
             root._accountListCommandIndex++
             root._accountsOutput = ""
             root._accountsError = ""
-            accountsProcess.command = root.accountListCommands[root._accountListCommandIndex]
+            accountsProcess.command = Model.boundedCaptureCommand(
+              root.accountListCommands[root._accountListCommandIndex],
+              Model.cliResponseByteLimit, Model.cliErrorByteLimit)
             accountsProcess.running = true
           } else {
             root.accounts = []
@@ -649,7 +667,9 @@ Item {
     id: screenerProcess
     running: false
     // The CLI's cheap count request; no token ever leaves its credential store.
-    command: ["hey", "screener", "list", "--count", "--json"]
+    command: Model.boundedCaptureCommand(
+      ["hey", "screener", "list", "--count", "--json"],
+      Model.cliResponseByteLimit, Model.cliErrorByteLimit)
     stdout: StdioCollector {
       id: screenerStdout
       waitForEnd: true

@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import Quickshell.Io
 import "../.."
+import "../../Model.js" as Model
 
 TestCase {
   name: "Service"
@@ -24,13 +25,32 @@ TestCase {
     service = null
   }
 
+  function processCommand(process) {
+    var raw = process.command
+    var payload = Model.capturedCommandPayload(raw)
+    if (payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
+        || payload[0] === "omarchy-notification-send"
+        || (payload[0] === "bash" && String(payload[2] || "").indexOf("hey") !== -1))) {
+      verify(raw.length > payload.length, "HEY command has a producer-side output guard")
+      compare(raw[0], "bash")
+      compare(raw[1], "-o")
+      compare(raw[2], "pipefail")
+      compare(raw[3], "-c")
+      compare(raw[5], "hey-output-guard")
+      verify(Number(raw[6]) > 0)
+      verify(Number(raw[7]) > 0)
+    }
+    return payload
+  }
+
   function findProcess(prefix) {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length < prefix.length) continue
+      var command = processCommand(process)
+      if (command.length < prefix.length) continue
       var matches = true
       for (var j = 0; j < prefix.length; j++) {
-        if (String(process.command[j]) !== String(prefix[j])) {
+        if (String(command[j]) !== String(prefix[j])) {
           matches = false
           break
         }
@@ -45,7 +65,7 @@ TestCase {
   function completeAccountCommandFallback() {
     var process = accountsProcess()
     process.complete(2, "", '{"ok":false,"error":"unknown command \\"account\\" for \\"hey\\"","code":"usage"}')
-    compare(process.command, ["hey", "accounts", "list", "--json"])
+    compare(processCommand(process), ["hey", "accounts", "list", "--json"])
     verify(process.running)
     return process
   }
@@ -78,7 +98,7 @@ TestCase {
 
     var process = findProcess(["flock"])
     verify(process !== null)
-    compare(process.command, ["flock", "-n", "/tmp/37signals.hey.setup.lock", "true"])
+    compare(processCommand(process), ["flock", "-n", "/tmp/37signals.hey.setup.lock", "true"])
     verify(!service.tryStartSetup())
 
     process.complete(0, "", "")
@@ -141,7 +161,7 @@ TestCase {
     compare(service.authenticated, true)
     verify(accountsProcess().running)
     verify(screenerProcess().running)
-    compare(screenerProcess().command, ["hey", "screener", "list", "--count", "--json"])
+    compare(processCommand(screenerProcess()), ["hey", "screener", "list", "--count", "--json"])
   }
 
   function test_accounts_success_fetches_every_account() {
@@ -149,7 +169,7 @@ TestCase {
     accountsProcess().complete(0, '{"ok":true,"data":[{"id":"all","name":"All"},{"id":"1","name":"Personal"}]}', "")
 
     compare(service.accounts, [{ id: "1", name: "Personal", order: 0 }])
-    compare(notificationProcess().command,
+    compare(processCommand(notificationProcess()),
       ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
     verify(notificationProcess().running)
   }
@@ -160,7 +180,7 @@ TestCase {
     process.complete(0, '{"ok":true,"data":[{"id":"all","name":"All"},{"id":"1","name":"Personal"}]}', "")
 
     compare(service.accounts, [{ id: "1", name: "Personal", order: 0 }])
-    compare(notificationProcess().command,
+    compare(processCommand(notificationProcess()),
       ["hey", "box", "imbox", "--account", "all", "--limit", "50", "--json"])
   }
 
@@ -170,7 +190,7 @@ TestCase {
     process.complete(2, "", 'Error: unknown command "accounts" for "hey"')
 
     compare(service.accounts, [])
-    compare(notificationProcess().command,
+    compare(processCommand(notificationProcess()),
       ["hey", "box", "imbox", "--limit", "50", "--json"])
   }
 
@@ -242,7 +262,7 @@ TestCase {
 
     service.markRead(item)
 
-    compare(readProcess().command,
+    compare(processCommand(readProcess()),
       ["hey", "seen", "1", "--account", "account-1", "--json"])
   }
 
@@ -255,7 +275,7 @@ TestCase {
     service.markRead(first)
     compare(service.unreadCount, 1)
     compare(service.notifications[0].unread, false)
-    compare(readProcess().command, ["hey", "seen", "1", "--json"])
+    compare(processCommand(readProcess()), ["hey", "seen", "1", "--json"])
 
     service.markRead(first)
     compare(service.unreadCount, 1)
@@ -266,7 +286,7 @@ TestCase {
     compare(service._readQueue.length, 1)
 
     readProcess().complete(0, '{"ok":true}', "")
-    compare(readProcess().command, ["hey", "seen", "2", "--json"])
+    compare(processCommand(readProcess()), ["hey", "seen", "2", "--json"])
     verify(readProcess().running)
     compare(service.actionStatus, "Marking email as seen…")
 

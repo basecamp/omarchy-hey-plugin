@@ -1,7 +1,15 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
+const { spawn, spawnSync } = require("node:child_process")
+const fs = require("node:fs")
+const os = require("node:os")
+const path = require("node:path")
 
 const Model = require("../Model.js")
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
 
 test("setupPlan signs in when the HEY CLI is installed", () => {
   const plan = Model.setupPlan(true, false, "37signals.hey")
@@ -34,14 +42,67 @@ test("setupLockPath uses the runtime directory with a safe fallback", () => {
   assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
 })
 
-test("boxCommand reads the Imbox for the panel's threads", () => {
-  assert.deepEqual(Model.boxCommand(50, false), ["hey", "box", "imbox", "--limit", "50", "--json"])
-  assert.deepEqual(Model.boxCommand(20, true), ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
-  assert.deepEqual(Model.boxCommand("garbage", false), ["hey", "box", "imbox", "--limit", "50", "--json"])
+test("boxCommand reads the Imbox for the panel's threads through a bounded capture", () => {
+  assert.deepEqual(Model.capturedCommandPayload(Model.boxCommand(50, false)),
+    ["hey", "box", "imbox", "--limit", "50", "--json"])
+  assert.deepEqual(Model.capturedCommandPayload(Model.boxCommand(20, true)),
+    ["hey", "box", "imbox", "--account", "all", "--limit", "20", "--json"])
+  assert.deepEqual(Model.capturedCommandPayload(Model.boxCommand("garbage", false)),
+    ["hey", "box", "imbox", "--limit", "50", "--json"])
 })
 
-test("watchCommand follows every box of every account, tied to the shell, asking for every event", () => {
-  assert.deepEqual(Model.watchCommand(), ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+test("watchCommand follows every box of every account through a bounded capture", () => {
+  assert.deepEqual(Model.capturedCommandPayload(Model.watchCommand()),
+    ["setpriv", "--pdeathsig", "TERM", "hey", "--account", "all", "watch", "--events", "added,updated,deleted,new,resync"])
+})
+
+test("boundedCaptureCommand caps stdout and stderr at one detectable extra byte", () => {
+  const command = Model.boundedCaptureCommand([
+    "bash", "-c",
+    "printf '%100s' '' | tr ' ' x; printf '%100s' '' | tr ' ' y >&2"
+  ], 16, 8)
+  const result = spawnSync(command[0], command.slice(1), { encoding: "utf8" })
+
+  assert.equal(Buffer.byteLength(result.stdout), 17)
+  assert.equal(Buffer.byteLength(result.stderr), 9)
+  assert.equal(Model.exceedsUtf8ByteLimit(result.stdout, 16), true)
+  assert.equal(Model.exceedsUtf8ByteLimit(result.stderr, 8), true)
+})
+
+test("boundedCaptureCommand terminates the payload process group with its wrapper", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hey-output-guard-"))
+  const pidPath = path.join(directory, "payload.pid")
+  const command = Model.boundedCaptureCommand([
+    "bash", "-c", 'printf "%s" "$$" > "$1"; exec sleep 30', "payload", pidPath
+  ], 16, 8)
+  const wrapper = spawn(command[0], command.slice(1), { stdio: "ignore" })
+  let payloadPid = 0
+
+  try {
+    for (let i = 0; i < 100 && payloadPid === 0; i++) {
+      if (fs.existsSync(pidPath)) payloadPid = Number(fs.readFileSync(pidPath, "utf8"))
+      if (payloadPid === 0) await delay(10)
+    }
+    assert.ok(payloadPid > 0, "the payload started")
+
+    wrapper.kill("SIGTERM")
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("output guard did not exit")), 2000)
+      wrapper.once("exit", () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+
+    for (let i = 0; i < 100 && fs.existsSync(`/proc/${payloadPid}`); i++) await delay(10)
+    assert.equal(fs.existsSync(`/proc/${payloadPid}`), false, "the payload did not outlive its guard")
+  } finally {
+    if (wrapper.exitCode === null) wrapper.kill("SIGKILL")
+    if (payloadPid > 0) {
+      try { process.kill(payloadPid, "SIGKILL") } catch {}
+    }
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("parseFailure reads the CLI's error envelope from stderr", () => {
@@ -62,11 +123,12 @@ test("cliTooOld recognizes a CLI without hey watch, hey box --account or --event
   assert.match(Model.cliTooOldMessage, /0\.2\.2/)
 })
 
-test("probeCommand asks for the version ahead of the auth status, through bash", () => {
-  assert.equal(Model.probeCommand[0], "bash")
-  assert.match(Model.probeCommand[2], /command -v hey/)
-  assert.match(Model.probeCommand[2], /hey --version/)
-  assert.match(Model.probeCommand[2], /hey auth status --json$/)
+test("probeCommand asks for the version ahead of the auth status through a bounded capture", () => {
+  const command = Model.capturedCommandPayload(Model.probeCommand)
+  assert.equal(command[0], "bash")
+  assert.match(command[2], /command -v hey/)
+  assert.match(command[2], /hey --version/)
+  assert.match(command[2], /hey auth status --json$/)
 })
 
 test("parseProbe splits the version line from the auth status", () => {
@@ -89,9 +151,20 @@ test("cliVersionTooOld holds a release below the minimum against the CLI, and no
   assert.equal(Model.cliVersionTooOld(""), false)
 })
 
-test("parseScreenerCount reads a bare number as well as the older envelope", () => {
+test("parseScreenerCount reads bounded bare and envelope counts", () => {
   assert.deepEqual(Model.parseScreenerCount("0\n"), { ok: true, count: 0 })
   assert.deepEqual(Model.parseScreenerCount("12"), { ok: true, count: 12 })
+  assert.deepEqual(Model.parseScreenerCount("9".repeat(Model.remoteCountCharacterLimit + 1)), {
+    ok: false, error: "Could not parse the HEY Screener count", count: 0
+  })
+  assert.deepEqual(Model.parseScreenerCount(JSON.stringify({
+    ok: true, data: { pending_count: "9".repeat(Model.remoteCountCharacterLimit + 1) }
+  })), {
+    ok: false, error: "Could not parse the HEY Screener count", count: 0
+  })
+  assert.deepEqual(Model.parseScreenerCount(String(Model.remoteCountMaximum + 1)), {
+    ok: true, count: Model.remoteCountMaximum
+  })
 })
 
 test("watchLine reads a hey watch line: the change, the box, and whether it is new mail", () => {
@@ -116,6 +189,25 @@ test("watchLine reads a hey watch line: the change, the box, and whether it is n
   assert.equal(ready.posting, null)
   assert.equal(Model.watchLine("   "), null)
   assert.equal(Model.watchLine("not json").change, "unknown")
+  assert.equal(Model.watchLine("x".repeat(Model.watchLineByteLimit + 1)).change, "unknown")
+
+  const bounded = Model.watchLine(JSON.stringify({
+    change: "added",
+    box: { kind: "imbox", name: "B".repeat(500) },
+    posting: {
+      id: "1".repeat(100),
+      name: "T".repeat(500),
+      summary: "S".repeat(1000),
+      app_url: "/" + "u".repeat(3000),
+      creator: { name: "C".repeat(500) }
+    }
+  }))
+  assert.equal(bounded.boxName.length, Model.remoteNameCharacterLimit)
+  assert.equal(bounded.posting.id.length, Model.remoteIdCharacterLimit)
+  assert.equal(bounded.posting.name.length, Model.remoteTitleCharacterLimit)
+  assert.equal(bounded.posting.summary.length, Model.remoteExcerptCharacterLimit)
+  assert.equal(bounded.posting.app_url.length, Model.remoteUrlCharacterLimit)
+  assert.equal(bounded.posting.creator.name.length, Model.remoteNameCharacterLimit)
   assert.equal(Model.newImboxMail(null), false)
 })
 
