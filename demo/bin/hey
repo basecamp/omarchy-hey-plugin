@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import signal
+import sys
+import tempfile
+import time
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+def fail(message, exit_code=2):
+    print(json.dumps({"ok": False, "error": message}), file=sys.stderr)
+    raise SystemExit(exit_code)
+
+
+def option(args, name, fallback=None):
+    try:
+        return args[args.index(name) + 1]
+    except (ValueError, IndexError):
+        if fallback is not None:
+            return fallback
+        fail(f"Missing required option: {name}")
+
+
+def load_fixture():
+    default = Path(__file__).resolve().parent.parent / "fixtures" / "screenshot.json"
+    path = Path(os.environ.get("HEY_DEMO_FIXTURE", default))
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"Could not load demo fixture {path}: {error}")
+
+
+def state_path():
+    default_dir = Path(tempfile.gettempdir()) / f"omarchy-hey-demo-{os.getuid()}"
+    directory = Path(os.environ.get("HEY_DEMO_STATE_DIR", default_dir))
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / "state.json"
+
+
+def load_state():
+    path = state_path()
+    if not path.exists():
+        return {"seen_ids": []}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"Could not load demo state: {error}")
+
+
+def save_state(state):
+    path = state_path()
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state))
+    temporary.replace(path)
+
+
+def rendered_posting(source, seen, now):
+    posting = deepcopy(source)
+    minutes_ago = int(posting.pop("minutes_ago"))
+    posting.pop("state", None)
+    timestamp = now - timedelta(minutes=minutes_ago)
+    formatted = timestamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    posting["created_at"] = formatted
+    posting["updated_at"] = formatted
+    posting["active_at"] = formatted
+    posting["seen"] = seen
+    posting["app_url"] = ""
+    return posting
+
+
+def auth_status():
+    print(json.dumps({
+        "ok": True,
+        "data": {"authenticated": True, "expired": False},
+        "summary": "Authenticated",
+    }))
+
+
+def list_accounts(fixture):
+    print(json.dumps({"ok": True, "data": fixture["accounts"]}))
+
+
+def list_imbox(fixture, args):
+    selected = option(args, "--account", "all")
+    limit = int(option(args, "--limit", "50"))
+    seen_ids = {str(value) for value in load_state().get("seen_ids", [])}
+    now = datetime.now(timezone.utc)
+    postings = []
+    for source in fixture["postings"]:
+        if selected != "all" and str(source["account_id"]) != str(selected):
+            continue
+        postings.append(rendered_posting(source, str(source["id"]) in seen_ids or source.get("state") == "seen", now))
+    postings.sort(key=lambda item: item["active_at"], reverse=True)
+    print(json.dumps({
+        "ok": True,
+        "data": {
+            "id": 1,
+            "name": "Imbox",
+            "postings": postings[:limit],
+            "total_count": len(postings),
+        },
+    }))
+
+
+def mark_seen(fixture, args):
+    if len(args) < 2:
+        fail("Missing posting id")
+    posting_id = str(args[1])
+    account_id = str(args[3])
+    if not any(str(item["id"]) == posting_id and str(item["account_id"]) == account_id
+               for item in fixture["postings"]):
+        fail(f"Unknown demo posting: {posting_id}")
+    state = load_state()
+    seen_ids = {str(value) for value in state.get("seen_ids", [])}
+    seen_ids.add(posting_id)
+    state["seen_ids"] = sorted(seen_ids)
+    save_state(state)
+    print(json.dumps({"ok": True, "data": {"id": posting_id, "seen": True}}))
+
+
+def watch():
+    def stop(_signum, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    print(json.dumps({"change": "ready"}), flush=True)
+    while True:
+        time.sleep(3600)
+
+
+def valid_tui_command(args):
+    try:
+        tui_index = args.index("tui")
+    except ValueError:
+        return False
+
+    prefix = args[:tui_index]
+    if prefix and not (len(prefix) == 2 and prefix[0] == "--account"
+                       and prefix[1].isdigit() and int(prefix[1]) > 0):
+        return False
+
+    values = {}
+    remote = False
+    index = tui_index + 1
+    while index < len(args):
+        flag = args[index]
+        if flag == "--remote":
+            if remote:
+                return False
+            remote = True
+            index += 1
+            continue
+        if flag not in ("--instance", "--topic", "--topic-title") or flag in values or index + 1 >= len(args):
+            return False
+        values[flag] = args[index + 1]
+        index += 2
+
+    if values.get("--instance") != "omarchy":
+        return False
+    topic = values.get("--topic", "")
+    if topic and (not topic.isdigit() or int(topic) <= 0):
+        return False
+    if (remote or "--topic-title" in values) and not topic:
+        return False
+    return True
+
+
+def main():
+    fixture = load_fixture()
+    args = sys.argv[1:]
+
+    if args == ["--version"]:
+        print("hey version 0.2.2")
+    elif args == ["auth", "status", "--json"]:
+        auth_status()
+    elif args == ["accounts", "list", "--json"]:
+        list_accounts(fixture)
+    elif args in (
+        ["box", "imbox", "--limit", "50", "--json"],
+        ["box", "imbox", "--account", "all", "--limit", "50", "--json"],
+    ):
+        list_imbox(fixture, args)
+    elif args == ["screener", "list", "--count", "--json"]:
+        print(int(fixture.get("screener_count", 0)))
+    elif (len(args) == 5 and args[0] == "seen" and args[1].isdigit()
+          and args[2] == "--account" and args[3].isdigit() and args[4] == "--json"):
+        mark_seen(fixture, args)
+    elif args == ["--account", "all", "watch", "--events", "added,updated,deleted,new,resync"]:
+        watch()
+    elif valid_tui_command(args):
+        return
+    else:
+        fail("Unsupported demo HEY CLI command: " + " ".join(args))
+
+
+if __name__ == "__main__":
+    main()

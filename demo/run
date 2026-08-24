@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+omarchy_path="${OMARCHY_PATH:-/usr/share/omarchy}"
+plugins_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+installed_plugin="$plugins_dir/37signals.hey"
+shell_config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+fixture="$repo_root/demo/fixtures/screenshot.json"
+state_dir=""
+backup_dir=""
+installed_backup=""
+shell_config_backup="${shell_config}.hey-demo-backup"
+demo_lock="${XDG_RUNTIME_DIR:-/tmp}/37signals.hey.demo.lock"
+demo_launcher_pid=""
+demo_shell_pid=""
+shell_stopped=0
+original_workspace=""
+workspace_changed=0
+cleanup_done=0
+capture=0
+output=""
+
+usage() {
+  cat <<'USAGE'
+Usage: ./demo/run [--screenshot] [--output PATH]
+
+Runs the installed HEY plugin against fictional CLI data on an empty
+workspace. The normal shell, plugin checkout, workspace, and shell configuration
+are restored when the command exits.
+
+Options:
+  --screenshot       Capture the top bar and open HEY panel, then exit.
+  --output PATH      Screenshot destination. Implies --screenshot.
+  -h, --help         Show this help.
+USAGE
+}
+
+while (( $# > 0 )); do
+  case $1 in
+    --screenshot) capture=1 ;;
+    --output)
+      shift
+      (( $# > 0 )) || { echo "--output requires a path" >&2; exit 2; }
+      output=$1
+      capture=1
+      ;;
+    --output=*)
+      output=${1#--output=}
+      capture=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Demo mode requires '$1'." >&2
+    exit 1
+  }
+}
+
+shell_instances() {
+  local output
+  output=$(quickshell list -j -p "$omarchy_path/shell" --any-display 2>/dev/null || true)
+  if jq -e 'type == "array"' >/dev/null 2>&1 <<<"$output"; then
+    printf '%s\n' "$output"
+  else
+    printf '[]\n'
+  fi
+}
+
+wait_for_shell() {
+  local attempt
+  for attempt in $(seq 1 100); do
+    if OMARCHY_PATH="$omarchy_path" OMARCHY_SHELL_IPC_TIMEOUT=0.5s \
+        omarchy-shell shell ping >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Omarchy Shell did not become ready." >&2
+  return 1
+}
+
+wait_for_demo_shell() {
+  local environment path_value
+  wait_for_shell || return 1
+  demo_shell_pid=$(shell_instances | jq -r 'sort_by(.launch_time) | last | .pid // empty')
+  [[ -n $demo_shell_pid && -r /proc/$demo_shell_pid/environ ]] || {
+    echo "Could not identify the demo shell process." >&2
+    return 1
+  }
+
+  environment=$(tr '\0' '\n' </proc/$demo_shell_pid/environ)
+  grep -Fx "HEY_DEMO_FIXTURE=$fixture" >/dev/null <<<"$environment" || {
+    echo "The running shell does not have the demo fixture environment." >&2
+    return 1
+  }
+  grep -Fx "HEY_DEMO_STATE_DIR=$state_dir" >/dev/null <<<"$environment" || {
+    echo "The running shell does not have isolated demo state." >&2
+    return 1
+  }
+  path_value=$(sed -n 's/^PATH=//p' <<<"$environment")
+  [[ $path_value == "$repo_root/demo/bin:"* ]] || {
+    echo "The demo CLI is not first in the running shell's PATH." >&2
+    return 1
+  }
+}
+
+stop_shell() {
+  local attempt count
+  for attempt in $(seq 1 5); do
+    count=$(shell_instances | jq 'length')
+    (( count == 0 )) && return 0
+    timeout 5 quickshell kill -p "$omarchy_path/shell" --any-display >/dev/null 2>&1 || {
+      echo "Could not stop the existing Omarchy Shell." >&2
+      return 1
+    }
+  done
+
+  count=$(shell_instances | jq 'length')
+  (( count == 0 )) || {
+    echo "The existing Omarchy Shell is still running." >&2
+    return 1
+  }
+}
+
+focus_workspace() {
+  local workspace_json
+  workspace_json=$(jq -Rn --arg value "$1" '$value')
+  hyprctl dispatch "hl.dsp.focus({ workspace = $workspace_json })" >/dev/null
+}
+
+restore_shell_config() {
+  [[ -e $shell_config_backup ]] || return 0
+  mv -f "$shell_config_backup" "$shell_config" || {
+    echo "Could not restore shell configuration from $shell_config_backup" >&2
+    return 1
+  }
+}
+
+restore_plugin() {
+  [[ -e $installed_backup ]] || return 0
+  if [[ -L $installed_plugin && $(readlink -f "$installed_plugin") == "$repo_root" ]]; then
+    rm -f "$installed_plugin" || return 1
+  elif [[ -e $installed_plugin || -L $installed_plugin ]]; then
+    echo "Cannot restore the plugin because $installed_plugin was replaced." >&2
+    return 1
+  fi
+  mv "$installed_backup" "$installed_plugin" || {
+    echo "Could not restore plugin backup $installed_backup" >&2
+    return 1
+  }
+}
+
+cleanup() {
+  local status=$? cleanup_status=0
+  (( cleanup_done )) && exit "$status"
+  cleanup_done=1
+  trap - EXIT INT TERM HUP
+  set +e
+
+  shell_stopped_cleanly=1
+  if (( shell_stopped )); then
+    stop_shell || {
+      echo "Could not stop the demo Omarchy Shell." >&2
+      shell_stopped_cleanly=0
+      cleanup_status=1
+    }
+    [[ -n $demo_launcher_pid ]] && wait "$demo_launcher_pid" 2>/dev/null
+  fi
+
+  if (( shell_stopped_cleanly )); then
+    restore_shell_config || cleanup_status=1
+    restore_plugin || cleanup_status=1
+
+    if (( workspace_changed )) && [[ -n $original_workspace ]]; then
+      focus_workspace "$original_workspace" >/dev/null 2>&1 || {
+        echo "Could not restore workspace $original_workspace." >&2
+        cleanup_status=1
+      }
+    fi
+  fi
+
+  if (( shell_stopped && cleanup_status == 0 )); then
+    omarchy-restart-shell >/dev/null 2>&1 && wait_for_shell || {
+      echo "Could not restore the normal Omarchy Shell." >&2
+      cleanup_status=1
+    }
+  fi
+
+  if (( cleanup_status == 0 )); then
+    [[ -n $state_dir ]] && rm -rf "$state_dir"
+    [[ -n $backup_dir ]] && rm -rf "$backup_dir"
+  else
+    echo "Demo cleanup did not complete. Recovery artifacts were retained." >&2
+    [[ -n $backup_dir && -e $backup_dir ]] && echo "Demo state: $backup_dir" >&2
+    [[ -e $installed_backup ]] && echo "Plugin backup: $installed_backup" >&2
+    [[ -e $shell_config_backup ]] && echo "Shell config backup: $shell_config_backup" >&2
+    status=1
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+
+for command in flock grim hyprctl jq omarchy-launch-shell omarchy-restart-shell omarchy-shell python3 quickshell timeout; do
+  require_command "$command"
+done
+
+[[ -f $fixture ]] || { echo "Demo fixture not found: $fixture" >&2; exit 1; }
+[[ -f $shell_config ]] || { echo "Shell configuration not found: $shell_config" >&2; exit 1; }
+
+mkdir -p "$(dirname "$demo_lock")"
+exec 9>"$demo_lock"
+flock -n 9 || { echo "HEY demo mode is already running." >&2; exit 1; }
+[[ ! -L $shell_config ]] || { echo "Demo mode does not modify symlinked shell configurations." >&2; exit 1; }
+
+stale_backup=$(find "$plugins_dir" -maxdepth 1 -name '.37signals.hey.demo-backup-*' -print -quit)
+if [[ -n $stale_backup || -f $shell_config_backup ]]; then
+  echo "A previous demo did not restore cleanly." >&2
+  [[ -n $stale_backup ]] && echo "Plugin backup: $stale_backup" >&2
+  [[ -f $shell_config_backup ]] && echo "Shell config backup: $shell_config_backup" >&2
+  exit 1
+fi
+
+[[ -d $installed_plugin && ! -L $installed_plugin ]] || {
+  echo "Install and enable 37signals.hey before running the demo." >&2
+  exit 1
+}
+
+if [[ $(omarchy-shell lock isLocked 2>/dev/null) == "true" ]]; then
+  echo "Unlock the session before starting demo mode." >&2
+  exit 1
+fi
+
+monitor=$(hyprctl monitors -j | jq -c '([.[] | select(.focused)][0] // .[0])')
+[[ -n $monitor && $monitor != null ]] || { echo "No active monitor found." >&2; exit 1; }
+[[ $(jq -r '.transform' <<<"$monitor") == 0 ]] || {
+  echo "Automatic demo screenshots currently require an unrotated monitor." >&2
+  exit 1
+}
+
+original_workspace=$(jq -r '.activeWorkspace.name' <<<"$monitor")
+used_workspaces=" $(hyprctl clients -j | jq -r '.[].workspace.id' | tr '\n' ' ') "
+demo_workspace=""
+for candidate in $(seq 10 99); do
+  if [[ $used_workspaces != *" $candidate "* ]]; then
+    demo_workspace=$candidate
+    break
+  fi
+done
+[[ -n $demo_workspace ]] || { echo "Could not find an empty demo workspace." >&2; exit 1; }
+
+backup_dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/hey-demo.XXXXXX")
+state_dir="$backup_dir/state"
+mkdir -p "$state_dir"
+
+shell_stopped=1
+stop_shell
+
+installed_backup="$plugins_dir/.37signals.hey.demo-backup-$$"
+mv "$installed_plugin" "$installed_backup"
+ln -s "$repo_root" "$installed_plugin"
+
+cp -a "$shell_config" "$shell_config_backup"
+temporary_config="$backup_dir/shell.demo.json"
+jq '.bar.layout.right = [{"id":"37signals.hey"}]' "$shell_config" >"$temporary_config"
+chmod --reference="$shell_config" "$temporary_config"
+mv "$temporary_config" "$shell_config"
+
+PATH="$repo_root/demo/bin:$PATH" \
+HEY_DEMO_FIXTURE="$fixture" \
+HEY_DEMO_STATE_DIR="$state_dir" \
+OMARCHY_PATH="$omarchy_path" \
+omarchy-launch-shell >/dev/null 2>&1 &
+demo_launcher_pid=$!
+
+wait_for_demo_shell
+focus_workspace "$demo_workspace"
+workspace_changed=1
+sleep 0.3
+
+visible_clients=$(hyprctl clients -j | jq --argjson workspace "$demo_workspace" \
+  '[.[] | select(.mapped and (.pinned or .workspace.id == $workspace))] | length')
+if (( visible_clients > 0 )); then
+  echo "The selected demo workspace is not empty." >&2
+  exit 1
+fi
+
+omarchy-shell 37signals.hey refresh >/dev/null
+for attempt in $(seq 1 100); do
+  status=$(omarchy-shell 37signals.hey status 2>/dev/null || true)
+  if [[ -n $status ]] && jq -e '.refreshing == false and .accounts == 3 and .notifications > 0' \
+      >/dev/null 2>&1 <<<"$status"; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z ${status:-} ]] || ! jq -e '.refreshing == false and .accounts == 3 and .notifications > 0' \
+    >/dev/null 2>&1 <<<"$status"; then
+  echo "Demo notifications did not load." >&2
+  exit 1
+fi
+
+omarchy-shell notifications dismissAll >/dev/null 2>&1 || true
+omarchy-shell osd close >/dev/null 2>&1 || true
+hyprctl dismissnotify >/dev/null 2>&1 || true
+omarchy-shell 37signals.hey open >/dev/null
+sleep 1
+
+monitor_x=$(jq -r '.x' <<<"$monitor")
+monitor_y=$(jq -r '.y' <<<"$monitor")
+logical_width=$(jq -r '(.width / .scale) | floor' <<<"$monitor")
+logical_height=$(jq -r '(.height / .scale) | floor' <<<"$monitor")
+
+if (( capture )); then
+  [[ -n $output ]] || output="${XDG_PICTURES_DIR:-$HOME/Pictures}/hey-demo-$(date +'%Y-%m-%d_%H-%M-%S').png"
+  mkdir -p "$(dirname "$output")"
+
+  bar_geometry=$(omarchy-shell shell debugBarGeometry)
+  widget=$(jq -c '.[] | select(.id == "37signals.hey" and .visible)' <<<"$bar_geometry" | head -n1)
+  [[ -n $widget ]] || { echo "Could not locate the HEY bar widget." >&2; exit 1; }
+
+  widget_center=$((monitor_x + $(jq -r '.x + (.width / 2) | floor' <<<"$widget")))
+  crop_width=454
+  crop_height=630
+  (( crop_width > logical_width )) && crop_width=$logical_width
+  (( crop_height > logical_height )) && crop_height=$logical_height
+  crop_x=$((widget_center - crop_width / 2))
+  (( crop_x < monitor_x )) && crop_x=$monitor_x
+  monitor_right=$((monitor_x + logical_width))
+  (( crop_x + crop_width > monitor_right )) && crop_x=$((monitor_right - crop_width))
+
+  geometry="$crop_x,$monitor_y ${crop_width}x${crop_height}"
+  grim -g "$geometry" "$output"
+  echo "$output"
+  exit 0
+fi
+
+cat <<EOF
+HEY demo mode is running on empty workspace $demo_workspace.
+The current checkout is loaded with fictional screenshot data.
+Press Ctrl+C to restore the normal shell and workspace $original_workspace.
+EOF
+
+wait "$demo_launcher_pid"

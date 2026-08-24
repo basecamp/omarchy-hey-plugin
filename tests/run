@@ -3,6 +3,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+bash -n "$root/demo/run"
+
 node --test \
   --experimental-test-coverage \
   --test-coverage-lines=90 \
