@@ -37,9 +37,16 @@ test("setupPlan is not needed when setup is complete", () => {
   assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
 })
 
-test("setupLockPath uses the runtime directory with a safe fallback", () => {
-  assert.equal(Model.setupLockPath("/run/user/1000/"), "/run/user/1000/37signals.hey.setup.lock")
-  assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
+test("setupLockCheckCommand uses a private runtime directory without a /tmp fallback", () => {
+  const command = Model.setupLockCheckCommand()
+  assert.deepEqual(command.slice(0, 2), ["bash", "-c"])
+  assert.match(command[2], /XDG_RUNTIME_DIR:-\/run\/user\/\$uid/)
+  assert.match(command[2], /37signals\.hey-\$uid/)
+  assert.match(command[2], /stat -c %a/)
+  assert.match(command[2], /exec 9<"\$lock"/)
+  assert.match(command[2], /flock -n 9$/)
+  assert.doesNotMatch(command[2], /\/tmp/)
+  assert.doesNotMatch(command[2], /9>/)
 })
 
 test("boxCommand reads the Imbox for the panel's threads through a bounded capture", () => {

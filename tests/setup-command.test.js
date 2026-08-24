@@ -1,6 +1,6 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
-const { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs")
+const { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } = require("node:fs")
 const { tmpdir } = require("node:os")
 const path = require("node:path")
 const { once } = require("node:events")
@@ -27,6 +27,10 @@ function setupFixture(run) {
   return Promise.resolve(run({ runtimeDir, completionLog, env })).finally(() => {
     rmSync(runtimeDir, { recursive: true, force: true })
   })
+}
+
+function setupLockDirectory(runtimeDir) {
+  return path.join(runtimeDir, `37signals.hey-${process.getuid()}`, "setup-lock")
 }
 
 async function waitForLock(lockPath) {
@@ -78,11 +82,43 @@ test("setup completion runs after command failure and preserves its status", asy
   })
 })
 
+test("setup lock rejects a planted symlink without modifying its target", async () => {
+  await setupFixture(({ runtimeDir, env }) => {
+    const base = path.dirname(setupLockDirectory(runtimeDir))
+    const victim = path.join(runtimeDir, "victim.txt")
+    mkdirSync(base, { mode: 0o700 })
+    writeFileSync(victim, "keep this content")
+    symlinkSync(victim, setupLockDirectory(runtimeDir))
+
+    const result = spawnSync("bash", ["-c", Model.setupLaunchCommand("true", "37signals.hey")], {
+      encoding: "utf8",
+      env
+    })
+
+    assert.equal(result.status, 76)
+    assert.equal(readFileSync(victim, "utf8"), "keep this content")
+  })
+})
+
+test("setup lock rejects a runtime directory accessible to other users", async () => {
+  await setupFixture(({ runtimeDir, env }) => {
+    chmodSync(runtimeDir, 0o777)
+
+    const result = spawnSync("bash", ["-c", Model.setupLaunchCommand("true", "37signals.hey")], {
+      encoding: "utf8",
+      env
+    })
+
+    assert.equal(result.status, 76)
+    assert.equal(existsSync(path.dirname(setupLockDirectory(runtimeDir))), false)
+  })
+})
+
 test("setup lock blocks concurrent runs and recovers after terminal termination", async () => {
   await setupFixture(async ({ runtimeDir, completionLog, env }) => {
     const command = Model.setupLaunchCommand("sleep 30", "37signals.hey")
     const first = spawn("bash", ["-c", command], { detached: true, env, stdio: "ignore" })
-    const lockPath = path.join(runtimeDir, "37signals.hey.setup.lock")
+    const lockPath = setupLockDirectory(runtimeDir)
 
     try {
       await waitForLock(lockPath)
@@ -108,7 +144,7 @@ test("setup lock recovers after termination that cannot report completion", asyn
   await setupFixture(async ({ runtimeDir, completionLog, env }) => {
     const command = Model.setupLaunchCommand("sleep 30", "37signals.hey")
     const child = spawn("bash", ["-c", command], { detached: true, env, stdio: "ignore" })
-    const lockPath = path.join(runtimeDir, "37signals.hey.setup.lock")
+    const lockPath = setupLockDirectory(runtimeDir)
 
     try {
       await waitForLock(lockPath)

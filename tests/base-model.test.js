@@ -48,9 +48,16 @@ test("setupPlan prioritizes installation and is not needed when setup is complet
   assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
 })
 
-test("setupLockPath uses the runtime directory with a safe fallback", () => {
-  assert.equal(Model.setupLockPath("/run/user/1000/"), "/run/user/1000/37signals.hey.setup.lock")
-  assert.equal(Model.setupLockPath(""), "/tmp/37signals.hey.setup.lock")
+test("setupLockCheckCommand uses a private runtime directory without a /tmp fallback", () => {
+  const command = Model.setupLockCheckCommand()
+  assert.deepEqual(command.slice(0, 2), ["bash", "-c"])
+  assert.match(command[2], /XDG_RUNTIME_DIR:-\/run\/user\/\$uid/)
+  assert.match(command[2], /37signals\.hey-\$uid/)
+  assert.match(command[2], /stat -c %a/)
+  assert.match(command[2], /exec 9<"\$lock"/)
+  assert.match(command[2], /flock -n 9$/)
+  assert.doesNotMatch(command[2], /\/tmp/)
+  assert.doesNotMatch(command[2], /9>/)
 })
 
 test("setupLaunchCommand safely quotes the IPC target", () => {
@@ -58,6 +65,9 @@ test("setupLaunchCommand safely quotes the IPC target", () => {
   assert.match(command, /target='target'\\''s name'/)
   assert.match(command, /setupFinished/)
   assert.match(command, /exit 75/)
+  assert.match(command, /9<"\$lock"/)
+  assert.doesNotMatch(command, /9>/)
+  assert.doesNotMatch(command, /\/tmp/)
 })
 
 test("parseJson accepts successful objects and reports CLI errors", () => {
@@ -313,8 +323,10 @@ test("notificationBadgeText shows a count or close glyph", () => {
   assert.equal(Model.notificationBadgeText({ unreadCount: 4 }, true), "󰅖")
 })
 
-test("cleanText removes markup, decodes entities, rejects objects, and bounds work", () => {
-  assert.equal(Model.cleanText(` A\\n<br> B &nbsp; &lt;x&gt; &amp; &#39;y&#39; &quot;`), "A B <x> & 'y' \"")
+test("cleanText removes literal and encoded markup before text reaches the shell", () => {
+  assert.equal(Model.cleanText(` A\\n<br> B &nbsp; &lt;x&gt; &amp; &#39;y&#39; &quot;`), "A B & 'y' \"")
+  assert.equal(Model.cleanText("&lt;img src='file:///etc/passwd'&gt;Subject"), "Subject")
+  assert.equal(Model.cleanText("2 &lt; 3 &gt; 1"), "2 1")
   assert.equal(Model.cleanText("&amp;lt;x&amp;gt;"), "&lt;x&gt;")
   assert.equal(Model.cleanText("x".repeat(1000), 10), "x".repeat(10))
   assert.equal(Model.cleanText({ text: "no" }), "")

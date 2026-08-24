@@ -548,6 +548,7 @@ Panel {
                 visible: text !== ""
                 width: parent.width
                 text: root.heroStatusText.toUpperCase()
+                textFormat: Text.PlainText
                 color: service.lastError !== "" && service.actionStatus === "" ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -583,7 +584,7 @@ Panel {
             foreground: root.foreground
           }
 
-          Dropdown {
+          PlainTextDropdown {
             id: accountDropdown
             visible: service.accountCount > 1 && !root.needsSetup
             width: parent.width
@@ -831,6 +832,7 @@ Panel {
                       Text {
                         anchors.centerIn: parent
                         text: notificationRow.modelData.initials || "?"
+                        textFormat: Text.PlainText
                         color: Color.popups.background
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -845,6 +847,7 @@ Panel {
                       Text {
                         Layout.fillWidth: true
                         text: notificationRow.modelData.title
+                        textFormat: Text.PlainText
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.body
@@ -856,6 +859,7 @@ Panel {
                         visible: notificationRow.modelData.excerpt !== ""
                         Layout.fillWidth: true
                         text: notificationRow.modelData.excerpt
+                        textFormat: Text.PlainText
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
@@ -867,6 +871,7 @@ Panel {
                       Text {
                         Layout.fillWidth: true
                         text: Model.notificationMeta(notificationRow.modelData, root.nowMs, root.accountFilter === "" && service.accountCount > 1)
+                        textFormat: Text.PlainText
                         color: Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption

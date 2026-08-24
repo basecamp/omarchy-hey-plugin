@@ -41,7 +41,8 @@ TestCase {
   function processCommand(process) {
     var raw = process.command
     var payload = Model.capturedCommandPayload(raw)
-    if (payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
+    var setupLock = JSON.stringify(raw) === JSON.stringify(Model.setupLockCheckCommand())
+    if (!setupLock && payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
         || payload[0] === "omarchy-notification-send"
         || (payload[0] === "bash" && String(payload[2] || "").indexOf("hey") !== -1))) {
       verify(raw.length > payload.length, "HEY command has a producer-side output guard")
@@ -63,7 +64,8 @@ TestCase {
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
       var command = processCommand(process)
-      if (command.length > 1 && command[0] === "bash" && command[1] === "-c") return process
+      if (command.length > 2 && command[0] === "bash" && command[1] === "-c"
+          && String(command[2]).indexOf("command -v hey") !== -1) return process
     }
     return null
   }
@@ -131,9 +133,10 @@ TestCase {
   }
 
   function findSetupLockProcess() {
+    var expected = JSON.stringify(Model.setupLockCheckCommand())
     for (var i = 0; i < ProcessRegistry.processes.length; i++) {
       var process = ProcessRegistry.processes[i]
-      if (process.command.length > 0 && process.command[0] === "flock") return process
+      if (JSON.stringify(process.command) === expected) return process
     }
     return null
   }
@@ -158,7 +161,7 @@ TestCase {
 
     var process = findSetupLockProcess()
     verify(process !== null)
-    compare(process.command, ["flock", "-n", "/tmp/37signals.hey.setup.lock", "true"])
+    compare(process.command, Model.setupLockCheckCommand())
     verify(!service.tryStartSetup())
 
     process.complete(0, "", "")

@@ -3,10 +3,24 @@
 // the panel launches in a floating terminal. The launch command preserves
 // the fix's exit status through the IPC refresh so the terminal
 // presentation can honor Ctrl-C (exit 130) from the fix itself.
-var setupLockFilename = "37signals.hey.setup.lock"
+var setupLockDirectoryName = "setup-lock"
+var setupLockShell = "uid=$(id -u) || exit 76; "
+  + "runtime=${XDG_RUNTIME_DIR:-/run/user/$uid}; "
+  + "[ -d \"$runtime\" ] && [ ! -L \"$runtime\" ] "
+  + "&& [ \"$(stat -c %u -- \"$runtime\" 2>/dev/null)\" = \"$uid\" ] "
+  + "&& [ \"$(stat -c %a -- \"$runtime\" 2>/dev/null)\" = 700 ] || exit 76; "
+  + "ensure_private_dir() { path=$1; "
+  + "if mkdir -m 700 -- \"$path\" 2>/dev/null; then return 0; fi; "
+  + "[ -d \"$path\" ] && [ ! -L \"$path\" ] "
+  + "&& [ \"$(stat -c %u -- \"$path\" 2>/dev/null)\" = \"$uid\" ] "
+  + "&& chmod 700 -- \"$path\"; }; "
+  + "umask 077; base=\"$runtime/37signals.hey-$uid\"; "
+  + "ensure_private_dir \"$base\" || exit 76; "
+  + "lock=\"$base/" + setupLockDirectoryName + "\"; "
+  + "ensure_private_dir \"$lock\" || exit 76; "
 
-function setupLockPath(runtimeDir) {
-  return String(runtimeDir || "/tmp").replace(/\/+$/, "") + "/" + setupLockFilename
+function setupLockCheckCommand() {
+  return ["bash", "-c", setupLockShell + "exec 9<\"$lock\"; flock -n 9"]
 }
 
 function shellQuote(value) {
@@ -16,11 +30,11 @@ function shellQuote(value) {
 function setupLaunchCommand(fix, ipcTarget) {
   var target = shellQuote(ipcTarget)
   var completion = "omarchy-shell -q \"$target\" setupFinished"
-  return "target=" + target + "; lock=\"${XDG_RUNTIME_DIR:-/tmp}/" + setupLockFilename + "\"; "
+  return "target=" + target + "; " + setupLockShell
     + "( flock -n 9 || { printf '%s\\n' 'HEY setup is already running.'; exit 75; }; "
     + "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
     + "trap 'rc=$?; trap - EXIT; flock -u 9; " + completion + "; exit $rc' EXIT; "
-    + String(fix || "") + " ) 9>\"$lock\""
+    + String(fix || "") + " ) 9<\"$lock\""
 }
 
 function setupPlan(installed, authenticated, ipcTarget) {
@@ -701,18 +715,27 @@ function notificationBadgeText(item, hovered) {
   return String(Math.max(1, (item && item.unreadCount) || 0))
 }
 
+function decodeTextEntity(entity) {
+  switch (String(entity || "").toLowerCase()) {
+    case "&nbsp;": return " "
+    case "&amp;": return "&"
+    case "&lt;": return "<"
+    case "&gt;": return ">"
+    case "&#39;":
+    case "&apos;": return "'"
+    case "&quot;": return "\""
+    default: return ""
+  }
+}
+
 function cleanText(value, limit) {
   var maximum = positiveInteger(limit, remoteExcerptCharacterLimit)
   var text = boundedString(value, maximum)
     .replace(/\\[nrt]/g, " ")
+    .replace(/&(?:nbsp|amp|lt|gt|#39|apos|quot);/gi, decodeTextEntity)
     .replace(/<br\s*\/?\s*>/gi, " ")
     .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, "\"")
-    .replace(/&amp;/gi, "&")
+    .replace(/[<>]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
   return boundedString(text, maximum)
@@ -756,7 +779,7 @@ function notificationMeta(item, nowMs, showAccount) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    setupLockPath: setupLockPath,
+    setupLockCheckCommand: setupLockCheckCommand,
     setupLaunchCommand: setupLaunchCommand,
     setupPlan: setupPlan,
     boundedCaptureCommand: boundedCaptureCommand,

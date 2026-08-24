@@ -28,7 +28,8 @@ TestCase {
   function processCommand(process) {
     var raw = process.command
     var payload = Model.capturedCommandPayload(raw)
-    if (payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
+    var setupLock = JSON.stringify(raw) === JSON.stringify(Model.setupLockCheckCommand())
+    if (!setupLock && payload.length > 0 && (payload[0] === "hey" || payload[0] === "setpriv"
         || payload[0] === "omarchy-notification-send"
         || (payload[0] === "bash" && String(payload[2] || "").indexOf("hey") !== -1))) {
       verify(raw.length > payload.length, "HEY command has a producer-side output guard")
@@ -63,7 +64,8 @@ TestCase {
     return null
   }
 
-  function probeProcess() { return findProcess(["bash", "-c"]) }
+  function probeProcess() { return findProcess(Model.capturedCommandPayload(Model.probeCommand)) }
+  function setupLockProcess() { return findProcess(Model.setupLockCheckCommand()) }
   function accountsProcess() { return findProcess(["hey", "account", "list"] ) }
   function completeAccountCommandFallback() {
     var process = accountsProcess()
@@ -99,9 +101,9 @@ TestCase {
     service.setupRunning = true
     service.checkSetupRunning()
 
-    var process = findProcess(["flock"])
+    var process = setupLockProcess()
     verify(process !== null)
-    compare(processCommand(process), ["flock", "-n", "/tmp/37signals.hey.setup.lock", "true"])
+    compare(processCommand(process), Model.setupLockCheckCommand())
     verify(!service.tryStartSetup())
 
     process.complete(0, "", "")
@@ -112,7 +114,7 @@ TestCase {
   function test_setup_lock_check_detects_a_running_process() {
     service.checkSetupRunning()
 
-    var process = findProcess(["flock"])
+    var process = setupLockProcess()
     verify(process !== null)
     process.complete(1, "", "")
     compare(service.setupRunning, true)
