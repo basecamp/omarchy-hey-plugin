@@ -178,7 +178,7 @@ def main():
         print("hey version 0.2.2")
     elif args == ["auth", "status", "--json"]:
         auth_status()
-    elif args == ["accounts", "list", "--json"]:
+    elif args in (["account", "list", "--json"], ["accounts", "list", "--json"]):
         list_accounts(fixture)
     elif args in (
         ["box", "imbox", "--limit", "50", "--json"],

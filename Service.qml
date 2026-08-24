@@ -89,6 +89,11 @@ Item {
   property string _probeErrorOutput: ""
   property string _accountsOutput: ""
   property string _accountsError: ""
+  property int _accountListCommandIndex: 0
+  readonly property var accountListCommands: [
+    ["hey", "account", "list", "--json"],
+    ["hey", "accounts", "list", "--json"]
+  ]
   property string _notificationsOutput: ""
   property string _notificationsError: ""
   property string _screenerOutput: ""
@@ -203,16 +208,19 @@ Item {
     startWatch()
     _accountsOutput = ""
     _accountsError = ""
+    _accountListCommandIndex = 0
+    accountsProcess.command = accountListCommands[_accountListCommandIndex]
     _screenerOutput = ""
     _screenerError = ""
     accountsProcess.running = true
     screenerProcess.running = true
   }
 
-  function accountsCommandUnavailable(stdout, stderr) {
+  function accountsCommandUnavailable(stdout, stderr, commandName) {
     var text = (String(stdout || "") + " " + String(stderr || "")).toLowerCase()
-    return text.indexOf("unknown command \"accounts\"") !== -1
-      || text.indexOf("unknown command 'accounts'") !== -1
+    var name = String(commandName || "").toLowerCase()
+    return text.indexOf("unknown command \"" + name + "\"") !== -1
+      || text.indexOf("unknown command '" + name + "'") !== -1
   }
 
   function fetchNotifications(withAccountFilter) {
@@ -548,7 +556,7 @@ Item {
   Process {
     id: accountsProcess
     running: false
-    command: ["hey", "accounts", "list", "--json"]
+    command: root.accountListCommands[root._accountListCommandIndex]
     stdout: StdioCollector {
       id: accountsStdout
       waitForEnd: true
@@ -567,10 +575,17 @@ Item {
         return
       }
       if (exitCode !== 0) {
-        if (root.accountsCommandUnavailable(stdout, stderr)) {
-          // The compatibility path keeps older CLIs on their merged Imbox.
-          root.accounts = []
-          root.fetchNotifications(false)
+        if (root.accountsCommandUnavailable(stdout, stderr, accountsProcess.command[1])) {
+          if (root._accountListCommandIndex + 1 < root.accountListCommands.length) {
+            root._accountListCommandIndex++
+            root._accountsOutput = ""
+            root._accountsError = ""
+            accountsProcess.command = root.accountListCommands[root._accountListCommandIndex]
+            accountsProcess.running = true
+          } else {
+            root.accounts = []
+            root.fetchNotifications(false)
+          }
         } else {
           root.lastError = root.conciseError(stderr || stdout, "Could not list HEY accounts")
           root.refreshing = false

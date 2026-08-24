@@ -59,10 +59,15 @@ TestCase {
   function refreshToBox(accountsOK) {
     beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
-    var accounts = findHeyProcess("accounts")
+    var accounts = findHeyProcess("account")
     verify(accounts !== null)
-    if (accountsOK) accounts.complete(0, '{"ok":true,"data":[{"id":"1","name":"Personal"},{"id":"all","name":"All"}]}', "")
-    else accounts.complete(1, "", '{"ok":false,"error":"unknown command \"accounts\" for \"hey\"","code":"usage"}')
+    if (accountsOK) {
+      accounts.complete(0, '{"ok":true,"data":[{"id":"1","name":"Personal"},{"id":"all","name":"All"}]}', "")
+    } else {
+      accounts.complete(1, "", '{"ok":false,"error":"unknown command \"account\" for \"hey\"","code":"usage"}')
+      compare(accounts.command, ["hey", "accounts", "list", "--json"])
+      accounts.complete(1, "", '{"ok":false,"error":"unknown command \"accounts\" for \"hey\"","code":"usage"}')
+    }
     var box = findHeyProcess("box")
     verify(box !== null)
     return box
@@ -79,7 +84,7 @@ TestCase {
   // Completes a refresh that is in flight, probe first.
   function finishRefresh() {
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
-    findHeyProcess("accounts").complete(0, '{"ok":true,"data":[]}', "")
+    findHeyProcess("account").complete(0, '{"ok":true,"data":[]}', "")
     findHeyProcess("box").complete(0, '{"ok":true,"data":{"postings":[]}}', "")
     findHeyProcess("screener").complete(0, '{"ok":true,"data":{"pending_count":0}}', "")
   }
@@ -190,7 +195,7 @@ TestCase {
     compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy pkg aur add hey-cli)")
     verify(findWatchProcess() === null || !findWatchProcess().running)
     // The panel still reads on the timer, degraded.
-    verify(findHeyProcess("accounts").running)
+    verify(findHeyProcess("account").running)
   }
 
   function test_probe_accepts_a_cli_at_the_minimum() {
@@ -628,7 +633,7 @@ TestCase {
   function test_accounts_auth_error_on_stderr_asks_to_sign_in() {
     beginRefresh()
     findProbeProcess().complete(0, '{"ok":true,"data":{"authenticated":true}}', "")
-    findHeyProcess("accounts").complete(3, "", '{"ok":false,"error":"not logged in","code":"auth"}')
+    findHeyProcess("account").complete(3, "", '{"ok":false,"error":"not logged in","code":"auth"}')
     compare(service.authenticated, false)
     compare(service.refreshing, false)
   }
