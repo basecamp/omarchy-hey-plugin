@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Ui
 
 // Themed single-select dropdown with plain-text labels and Omarchy panel
 // colors. `options` accepts strings or { value, label } objects.
