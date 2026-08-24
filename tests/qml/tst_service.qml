@@ -64,9 +64,9 @@ TestCase {
     if (accountsOK) {
       accounts.complete(0, '{"ok":true,"data":[{"id":"1","name":"Personal"},{"id":"all","name":"All"}]}', "")
     } else {
-      accounts.complete(1, "", '{"ok":false,"error":"unknown command \"account\" for \"hey\"","code":"usage"}')
+      accounts.complete(1, "", '{"ok":false,"error":"unknown command \\"account\\" for \\"hey\\"","code":"usage"}')
       compare(accounts.command, ["hey", "accounts", "list", "--json"])
-      accounts.complete(1, "", '{"ok":false,"error":"unknown command \"accounts\" for \"hey\"","code":"usage"}')
+      accounts.complete(1, "", '{"ok":false,"error":"unknown command \\"accounts\\" for \\"hey\\"","code":"usage"}')
     }
     var box = findHeyProcess("box")
     verify(box !== null)

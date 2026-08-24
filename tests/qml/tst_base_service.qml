@@ -44,7 +44,7 @@ TestCase {
   function accountsProcess() { return findProcess(["hey", "account", "list"] ) }
   function completeAccountCommandFallback() {
     var process = accountsProcess()
-    process.complete(2, "", 'Error: unknown command "account" for "hey"')
+    process.complete(2, "", '{"ok":false,"error":"unknown command \\"account\\" for \\"hey\\"","code":"usage"}')
     compare(process.command, ["hey", "accounts", "list", "--json"])
     verify(process.running)
     return process
