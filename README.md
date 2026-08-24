@@ -66,6 +66,30 @@ The plugin manifest declares the right bar section as its default placement.
 - Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
 - Press `U` for new email, `P` for previously seen email, `S` for the Screener, `N` to toggle notifications, or `R` to refresh.
 
+## Demo data
+
+Launch the current checkout with fictional accounts and email:
+
+```bash
+./demo/run
+```
+
+The demo uses an empty workspace and temporarily shows only the HEY widget on the right side of the bar. Press `Ctrl+C` to restore the normal shell, plugin installation, bar layout, and previous workspace.
+
+Create a clean screenshot cropped to the top bar and open panel with:
+
+```bash
+./demo/run --screenshot
+```
+
+The screenshot is saved in `~/Pictures`. Choose a destination explicitly when useful:
+
+```bash
+./demo/run --screenshot --output /tmp/hey-demo.png
+```
+
+Demo mode runs the plugin against `demo/bin/hey`, which implements the same CLI commands used in production. It never reads HEY credentials or contacts HEY. Mark-as-seen actions are kept in temporary session state and disappear when the demo exits.
+
 ## Live updates
 
 The plugin is an Omarchy service as well as a bar widget: the shell starts it once, and every bar — one per monitor — reads that one instance, so one `hey watch` runs per shell. `hey --account all watch --events added,updated,deleted,new,resync` follows every HEY box of every linked account over HEY's cable — a persisted `hey accounts use` filter cannot hide changes from the panel — and prints a line per change; the plugin treats any line as a wake-up and re-reads the Imbox, debounced so a burst of changes costs one read (plus one follow-up when changes land while a read is in flight). The watch says `ready` once it is listening, and again after it catches up from a disconnect — a suspended laptop, a dropped network — and the read on that line is what keeps the panel gap-free and current within seconds of coming back. A fixed 10-minute refresh also rechecks the Imbox and Screener count, covering missed events and data that does not arrive through the box stream.
