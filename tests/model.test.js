@@ -59,7 +59,7 @@ test("cliTooOld recognizes a CLI without hey watch, hey box --account or --event
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
-  assert.match(Model.cliTooOldMessage, /0\.2\.0/)
+  assert.match(Model.cliTooOldMessage, /0\.2\.1/)
 })
 
 test("probeCommand asks for the version ahead of the auth status, through bash", () => {
@@ -80,7 +80,8 @@ test("parseProbe splits the version line from the auth status", () => {
 test("cliVersionTooOld holds a release below the minimum against the CLI, and nothing else", () => {
   assert.equal(Model.cliVersionTooOld("0.1.1"), true)
   assert.equal(Model.cliVersionTooOld("v0.1.9"), true)
-  assert.equal(Model.cliVersionTooOld("0.2.0"), false)
+  assert.equal(Model.cliVersionTooOld("0.2.0"), true)
+  assert.equal(Model.cliVersionTooOld("0.2.1"), false)
   assert.equal(Model.cliVersionTooOld("0.10.0"), false)
   assert.equal(Model.cliVersionTooOld("1.0.0"), false)
   assert.equal(Model.cliVersionTooOld("dev"), false)
@@ -119,10 +120,13 @@ test("watchLine reads a hey watch line: the change, the box, and whether it is n
 
 test("composeMailToast puts HEY and the subject on separate headline lines", () => {
   const toast = Model.composeMailToast("Imbox", [
-    { id: 9001, name: "Lunch on Thursday?", summary: "Are you free around noon?", creator: { name: "Maria Delgado" } }
+    { id: 9001, name: "Lunch on Thursday?", summary: "Are you free around noon?", app_url: "/topics/5511", account_id: 42, creator: { name: "Maria Delgado" } }
   ])
   assert.equal(toast.headline, "HEY\nLunch on Thursday?")
   assert.equal(toast.description, "Are you free around noon?")
+  assert.equal(toast.targetUrl, "https://app.hey.com/topics/5511")
+  assert.equal(toast.topicId, 5511)
+  assert.equal(toast.accountId, 42)
 })
 
 test("composeMailToast drops a description that already stood in for the subject", () => {
@@ -156,7 +160,7 @@ test("toastCommand goes out as HEY with its app icon, focus exec and printed id"
     "omarchy-notification-send",
     "--app-name", "HEY",
     "-u", "low",
-    "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui",
+    "--exec", "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui --instance omarchy",
     "HEY\nLunch on Thursday?",
     "Are you free around noon?",
     "-i", Model.toastIcon,
@@ -164,6 +168,53 @@ test("toastCommand goes out as HEY with its app icon, focus exec and printed id"
   ])
   const second = Model.toastCommand("HEY\n2 new in Imbox", "", 42)
   assert.deepEqual(second.slice(-6), ["HEY\n2 new in Imbox", "-i", "hey", "-p", "-r", "42"])
+})
+
+test("TUI clicks dispatch a topic before focusing or launching the TUI", () => {
+  assert.equal(Model.topicIdFromUrl("https://app.hey.com/topics/5511?from=notification"), 5511)
+  assert.equal(Model.topicIdFromUrl("https://app.hey.com/contacts/5511"), 0)
+  assert.deepEqual(Model.tuiRemoteCommand(5511, 42, "Lunch on Thursday?"),
+    ["hey", "--account", "42", "tui", "--instance", "omarchy", "--topic", "5511", "--topic-title", "Lunch on Thursday?", "--remote"])
+  assert.deepEqual(Model.tuiFocusCommand(5511, 42, "Lunch on Thursday?"),
+    ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey", "--account", "42", "tui", "--instance", "omarchy", "--topic", "5511"])
+  assert.equal(Model.tuiOpenCommand(5511, 42, "Lunch on Thursday?"),
+    "'hey' '--account' '42' 'tui' '--instance' 'omarchy' '--topic' '5511' '--topic-title' 'Lunch on Thursday?' '--remote' >/dev/null 2>&1 || true; " +
+    "'omarchy-launch-or-focus-tui' '--app-id=org.omarchy.hey' 'hey' '--account' '42' 'tui' '--instance' 'omarchy' '--topic' '5511'")
+  assert.equal(Model.tuiOpenCommand(0, 0), Model.toastFocusCommand)
+})
+
+test("toastCommand deep-links a single message into the TUI", () => {
+  const command = Model.toastCommand("HEY\nLunch on Thursday?", "Are you free?", 0,
+    "tui", "https://app.hey.com/topics/5511", 5511, 42, "Lunch on Thursday?")
+  assert.equal(command[6], Model.tuiOpenCommand(5511, 42, "Lunch on Thursday?"))
+})
+
+test("toastCommand opens a message in the HEY app when configured", () => {
+  const command = Model.toastCommand("HEY\nLunch on Thursday?", "Are you free?", 0,
+    "app", "https://app.hey.com/topics/5511?from=notification")
+  assert.equal(command[6], "omarchy-launch-webapp 'https://app.hey.com/topics/5511?from=notification'")
+  assert.equal(Model.toastExecCommand("app", "/topics/5511"),
+    "omarchy-launch-webapp 'https://app.hey.com/topics/5511'")
+  assert.equal(Model.toastExecCommand("app", "https://example.com/topics/5511"),
+    "omarchy-launch-webapp 'https://app.hey.com'")
+})
+
+test("toastCommand opens a message in the browser when configured", () => {
+  const command = Model.toastCommand("HEY\nLunch on Thursday?", "Are you free?", 0,
+    "browser", "https://app.hey.com/topics/5511?from=notification")
+  assert.deepEqual(command.slice(0, 8), [
+    "omarchy-notification-send",
+    "--app-name", "HEY",
+    "-u", "low",
+    "--exec", "xdg-open 'https://app.hey.com/topics/5511?from=notification'",
+    "HEY\nLunch on Thursday?"
+  ])
+  assert.equal(Model.toastExecCommand("browser", "/topics/5511"), "xdg-open 'https://app.hey.com/topics/5511'")
+  assert.equal(Model.toastExecCommand("browser", "javascript:alert(1)"), "xdg-open 'https://app.hey.com'")
+  assert.equal(Model.toastExecCommand("browser", "https://example.com/topics/5511"), "xdg-open 'https://app.hey.com'")
+  assert.equal(Model.toastExecCommand("browser", "https://app.hey.com.example.com/topics/5511"), "xdg-open 'https://app.hey.com'")
+  assert.equal(Model.toastExecCommand("browser", "http://app.hey.com/topics/5511"), "xdg-open 'https://app.hey.com'")
+  assert.equal(Model.toastExecCommand("unexpected", "https://example.com"), Model.toastFocusCommand)
 })
 
 test("notificationText keeps mail text from being read as an option", () => {

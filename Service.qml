@@ -42,13 +42,14 @@ Item {
   property string lastError: ""
   property string actionStatus: ""
 
-  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 600, 60, 3600)
-  readonly property int maxNotifications: intSetting("maxNotifications", 50, 10, 100)
+  readonly property int refreshIntervalSec: 600
+  readonly property int notificationLimit: 50
   // New-mail toasts: the watch says on every line whether the thread is new
   // mail, and the plugin toasts the Imbox's — one per burst at most, replacing
   // the previous one, identified as HEY so Omarchy's notification silencing
   // applies. Off unless the bar entry says true.
   readonly property bool notify: setting("notify", false) === true
+  readonly property string openAction: openActionSetting()
   readonly property int accountCount: accounts.length
   // Every process a refresh drives; a pending refresh waits for all of them.
   readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
@@ -102,10 +103,18 @@ Item {
     return value === undefined || value === null ? fallback : value
   }
 
-  function intSetting(name, fallback, minimum, maximum) {
-    var value = parseInt(String(setting(name, fallback)), 10)
-    if (!isFinite(value)) value = fallback
-    return Math.max(minimum, Math.min(maximum, value))
+  function choiceSetting(name, fallback, choices) {
+    var value = String(setting(name, fallback))
+    return choices.indexOf(value) === -1 ? fallback : value
+  }
+
+  function openActionSetting() {
+    var choices = ["app", "tui", "browser"]
+    var configured = String(setting("openAction", ""))
+    if (choices.indexOf(configured) !== -1) return configured
+    var toast = String(setting("toastClickAction", ""))
+    var email = String(setting("emailClickAction", ""))
+    return toast === email && choices.indexOf(toast) !== -1 ? toast : "tui"
   }
 
   function conciseError(value, fallback) {
@@ -209,7 +218,7 @@ Item {
   function fetchNotifications(withAccountFilter) {
     _notificationsOutput = ""
     _notificationsError = ""
-    notificationProcess.command = Model.boxCommand(maxNotifications, withAccountFilter)
+    notificationProcess.command = Model.boxCommand(notificationLimit, withAccountFilter)
     notificationProcess.running = true
   }
 
@@ -291,7 +300,8 @@ Item {
     _toastQueue = []
     _toastOutput = ""
     toastProcess.command = Model.toastCommand(toast.headline, toast.description,
-      Model.replaceableToastId(_toastId, _toastAtMs, Date.now()))
+      Model.replaceableToastId(_toastId, _toastAtMs, Date.now()), openAction,
+      toast.targetUrl, toast.topicId, toast.accountId, toast.title)
     toastProcess.running = true
   }
 
@@ -348,7 +358,16 @@ Item {
 
   function openNotification(item) {
     if (!item) return
-    if (item.url) Qt.openUrlExternally(String(item.url))
+    if (openAction === "tui") {
+      var topicId = Model.topicIdFromUrl(item.url)
+      var remoteCommand = Model.tuiRemoteCommand(topicId, item.accountId, item.title)
+      if (remoteCommand.length > 0) Quickshell.execDetached(remoteCommand)
+      Quickshell.execDetached(Model.tuiFocusCommand(topicId, item.accountId, item.title))
+    } else if (item.url) {
+      var url = Model.heyBrowserUrl(item.url)
+      if (openAction === "app") Quickshell.execDetached(["omarchy-launch-webapp", url])
+      else Qt.openUrlExternally(url)
+    }
     if (item.unread) markRead(item)
   }
 
@@ -426,7 +445,7 @@ Item {
     refreshSoon.restart()
   }
 
-  // The timer is the safety net under the watch, not the mechanism.
+  // The timer periodically rechecks the full panel data alongside the live watch.
   Timer {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
@@ -599,7 +618,7 @@ Item {
         return
       }
 
-      var parsed = Model.parseNotifications(stdout, root.maxNotifications, root.accounts)
+      var parsed = Model.parseNotifications(stdout, root.notificationLimit, root.accounts)
       if (!parsed.ok) {
         root.lastError = parsed.error
         root.refreshing = false

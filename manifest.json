@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "37signals.hey",
   "name": "HEY",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "37signals",
   "license": "MIT",
   "description": "Unread email from HEY, live over HEY's cable, with new-mail notifications — through the HEY CLI.",
@@ -26,34 +26,26 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 600,
-      "maxNotifications": 50,
-      "notify": false
+      "notify": false,
+      "openAction": "tui"
     },
     "schema": [
-      {
-        "key": "refreshIntervalSec",
-        "type": "integer",
-        "label": "Refresh interval (seconds)",
-        "min": 60,
-        "max": 3600,
-        "step": 60,
-        "defaultValue": 600
-      },
-      {
-        "key": "maxNotifications",
-        "type": "integer",
-        "label": "Emails to load",
-        "min": 10,
-        "max": 100,
-        "step": 10,
-        "defaultValue": 50
-      },
       {
         "key": "notify",
         "type": "boolean",
         "label": "New-mail notifications",
         "defaultValue": false
+      },
+      {
+        "key": "openAction",
+        "type": "enum",
+        "label": "Open emails in",
+        "options": [
+          "app",
+          "tui",
+          "browser"
+        ],
+        "defaultValue": "tui"
       }
     ]
   }

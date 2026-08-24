@@ -78,7 +78,7 @@ function isAuthError(code) {
   return value === "auth" || value === "auth_required"
 }
 
-var minimumCliVersion = "0.2.0"
+var minimumCliVersion = "0.2.1"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
 
 // The probe answers three questions in one process — is the CLI there, is it
@@ -122,8 +122,8 @@ function parseSemver(version) {
 // An older CLI trips over a flag it does not have — `hey box --account` is
 // 0.2.0 — or an event it does not know — `hey watch --events new` is 0.2.0
 // too — and a release older still has no `hey watch` and reports an unknown
-// command. The plugin only ever passes fixed flags, so any of them means the
-// CLI is too old.
+// command. HEY CLI 0.2.1 adds topic deep links for TUI clicks. The plugin only
+// ever passes fixed flags, so any unknown one means the CLI is too old.
 function cliTooOld(stdout, stderr) {
   return /unknown (command|flag|event)/i.test(String(stderr || "") + String(stdout || ""))
 }
@@ -181,12 +181,82 @@ function watchLine(line) {
 // puts new mail in one place, one toast per burst, replaced rather than
 // stacked, under the app-name HEY so Omarchy's notification silencing applies
 // (its own `omarchy-action` pops through DND on purpose), with the HEY app icon
-// and a click that focuses the TUI. The exec runs on the shell's side, so it
-// survives shell restarts.
+// and a click that opens the configured HEY destination. The exec runs on the
+// shell's side, so it survives shell restarts.
 var toastAppName = "HEY"
 var toastIcon = "hey"
 var toastPreviewLimit = 96
-var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui"
+var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui --instance omarchy"
+var heyWebUrl = "https://app.hey.com"
+
+function topicIdFromUrl(value) {
+  var match = String(value || "").match(/\/topics\/(\d+)(?:[/?#]|$)/)
+  if (!match) return 0
+  var id = parseInt(match[1], 10)
+  return isFinite(id) && id > 0 ? id : 0
+}
+
+function positiveId(value) {
+  var id = parseInt(String(value || ""), 10)
+  return isFinite(id) && id > 0 ? id : 0
+}
+
+function tuiRemoteCommand(topicId, accountId, title) {
+  var topic = positiveId(topicId)
+  if (topic === 0) return []
+  var command = ["hey"]
+  var account = positiveId(accountId)
+  if (account > 0) command.push("--account", String(account))
+  command.push("tui", "--instance", "omarchy", "--topic", String(topic))
+  var topicTitle = cleanText(title)
+  if (topicTitle !== "") command.push("--topic-title", topicTitle)
+  command.push("--remote")
+  return command
+}
+
+function tuiFocusCommand(topicId, accountId, title) {
+  var command = ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey"]
+  var account = positiveId(accountId)
+  if (account > 0) command.push("--account", String(account))
+  command.push("tui", "--instance", "omarchy")
+  var topic = positiveId(topicId)
+  if (topic > 0) command.push("--topic", String(topic))
+  return command
+}
+
+function shellCommand(command) {
+  var parts = []
+  for (var i = 0; i < command.length; i++) parts.push(shellQuote(command[i]))
+  return parts.join(" ")
+}
+
+function tuiOpenCommand(topicId, accountId, title) {
+  var remote = tuiRemoteCommand(topicId, accountId, title)
+  var focus = tuiFocusCommand(topicId, accountId, title)
+  if (remote.length === 0 && positiveId(accountId) === 0) return toastFocusCommand
+  if (remote.length === 0) return shellCommand(focus)
+  return shellCommand(remote) + " >/dev/null 2>&1 || true; " + shellCommand(focus)
+}
+
+// HEY posting URLs can be absolute or app-relative. Web actions stay on the
+// canonical HEY origin, with HEY's home page as the safe destination.
+function heyBrowserUrl(value) {
+  var url = String(value || "").trim()
+  if (/^https:\/\/app\.hey\.com(?:[/?#]|$)/i.test(url)) return url
+  if (url.charAt(0) === "/") return heyWebUrl + url
+  return heyWebUrl
+}
+
+// The toast action follows the configured destination. Web destinations open
+// the message URL, and grouped mail opens HEY's default page.
+function toastExecCommand(clickAction, targetUrl, topicId, accountId, title) {
+  var action = String(clickAction || "")
+  var url = shellQuote(heyBrowserUrl(targetUrl))
+  if (action === "app") return "omarchy-launch-webapp " + url
+  if (action === "browser") return "xdg-open " + url
+  return tuiOpenCommand(topicId, accountId, title)
+}
+
 // Notification ids are daemon-local, not stable identities: after a shell
 // restart the same number may belong to another application's notification,
 // and -r would overwrite that instead of replacing ours. Replacement only
@@ -233,7 +303,14 @@ function composeMailToast(boxName, postings) {
     var subject = postingSubject(posting)
     var description = notificationPreview(posting.summary || "")
     if (description === subject) description = ""  // the summary already stood in for a missing subject
-    return { headline: toastAppName + "\n" + subject, description: description }
+    return {
+      headline: toastAppName + "\n" + subject,
+      description: description,
+      targetUrl: heyBrowserUrl(posting.app_url || posting.url),
+      topicId: topicIdFromUrl(posting.app_url || posting.url),
+      accountId: positiveId(posting.account_id),
+      title: subject
+    }
   }
 
   var senders = []
@@ -246,7 +323,11 @@ function composeMailToast(boxName, postings) {
   }
   return {
     headline: toastAppName + "\n" + fresh.length + " new in " + (cleanText(boxName) || "Imbox"),
-    description: notificationPreview(senders.join(", "))
+    description: notificationPreview(senders.join(", ")),
+    targetUrl: heyWebUrl,
+    topicId: 0,
+    accountId: 0,
+    title: ""
   }
 }
 
@@ -270,12 +351,12 @@ function replaceableToastId(id, atMs, nowMs) {
 // toastCommand is the argv: omarchy-notification-send takes its own options
 // first, then the headline and the description, then anything for
 // notify-send — -p to print the daemon's id, -r to replace the last one.
-function toastCommand(headline, description, replaceId) {
+function toastCommand(headline, description, replaceId, clickAction, targetUrl, topicId, accountId, title) {
   var command = [
     "omarchy-notification-send",
     "--app-name", toastAppName,
     "-u", "low",
-    "--exec", toastFocusCommand,
+    "--exec", toastExecCommand(clickAction, targetUrl, topicId, accountId, title),
     notificationText(headline)
   ]
   if (String(description || "") !== "") command.push(notificationText(description))
@@ -553,10 +634,17 @@ if (typeof module !== "undefined") {
     notificationText: notificationText,
     replaceableToastId: replaceableToastId,
     toastCommand: toastCommand,
+    toastExecCommand: toastExecCommand,
+    topicIdFromUrl: topicIdFromUrl,
+    tuiRemoteCommand: tuiRemoteCommand,
+    tuiFocusCommand: tuiFocusCommand,
+    tuiOpenCommand: tuiOpenCommand,
+    heyBrowserUrl: heyBrowserUrl,
     toastAppName: toastAppName,
     toastIcon: toastIcon,
     toastPreviewLimit: toastPreviewLimit,
     toastFocusCommand: toastFocusCommand,
+    heyWebUrl: heyWebUrl,
     toastReplaceWindowMs: toastReplaceWindowMs,
     parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,

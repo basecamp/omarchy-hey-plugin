@@ -18,7 +18,14 @@ Panel {
   property double nowMs: Date.now()
   property string accountFilter: ""
   property string stateFilter: "unread"
+  property bool settingsOpen: false
+  property bool pendingSettingsOpen: false
 
+  readonly property var clickActionOptions: [
+    { value: "app", label: "HEY App" },
+    { value: "tui", label: "HEY Terminal UI" },
+    { value: "browser", label: "Browser" }
+  ]
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -152,7 +159,10 @@ Panel {
   function persistSettings(values) {
     var entry = { id: root.moduleName }
     for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
-    for (var key in values) entry[key] = values[key]
+    for (var key in values) {
+      if (values[key] === undefined) delete entry[key]
+      else entry[key] = values[key]
+    }
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
@@ -160,6 +170,15 @@ Panel {
 
   function toggleNotify() {
     persistSettings({ notify: !service.notify })
+  }
+
+  function showSettings(open) {
+    var next = open === true
+    if (settingsOpen === next || pageFlip.running) return
+    pendingSettingsOpen = next
+    accountDropdown.close()
+    openActionDropdown.close()
+    pageFlip.restart()
   }
 
   property var avatarPalette: []
@@ -242,10 +261,18 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) {
+  onOpenedChanged: {
+    if (!opened) {
+      pageFlip.stop()
+      settingsOpen = false
+      pendingSettingsOpen = false
+      cardRotation.angle = 0
+      return
+    }
     cursorActive = false
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
+    if (settingsFlick) settingsFlick.contentY = 0
     service.checkSetupRunning()
     service.refreshIfStale()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -337,6 +364,40 @@ Panel {
     }
   }
 
+  SequentialAnimation {
+    id: pageFlip
+
+    NumberAnimation {
+      target: cardRotation
+      property: "angle"
+      from: 0
+      to: 90
+      duration: 130
+      easing.type: Easing.InQuad
+    }
+    ScriptAction {
+      script: {
+        root.settingsOpen = root.pendingSettingsOpen
+        cardRotation.angle = -90
+        if (root.settingsOpen && settingsFlick) settingsFlick.contentY = 0
+      }
+    }
+    NumberAnimation {
+      target: cardRotation
+      property: "angle"
+      from: -90
+      to: 0
+      duration: 170
+      easing.type: Easing.OutQuad
+    }
+    ScriptAction {
+      script: Qt.callLater(function() {
+        if (root.settingsOpen) notificationSetting.forceActiveFocus()
+        else keyCatcher.forceActiveFocus()
+      })
+    }
+  }
+
   IpcHandler {
     target: root.ipcTarget
     function open(): void { root.open() }
@@ -358,6 +419,7 @@ Panel {
         unread: service.unreadCount,
         screener: service.screenerCount,
         notify: service.notify,
+        openAction: service.openAction,
         visible: root.filteredNotifications.length,
         stateFilter: root.stateFilter,
         accountFilter: root.accountFilter,
@@ -402,20 +464,29 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
-    contentHeight: panel.fittedContentHeight(fixedContent.implicitHeight + notificationContent.implicitHeight + Style.space(12), Style.space(600))
+    contentHeight: panel.fittedContentHeight(root.settingsOpen
+      ? settingsHeader.implicitHeight + settingsContent.implicitHeight + Style.space(24)
+      : fixedContent.implicitHeight + notificationContent.implicitHeight + Style.space(12), Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: accountDropdown.popupOpen
+      // Settings controls own their native focus chain and keys. The page-level
+      // Escape handler below returns to email after an open dropdown closes.
+      blocked: root.settingsOpen || accountDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
+        if (root.settingsOpen) return
         if (dx !== 0) root.cycleAccountFilter(dx)
         else if (dy !== 0) root.moveSelection(dy)
       }
-      onActivateRequested: root.activateSelection()
-      onCloseRequested: root.close()
+      onActivateRequested: if (!root.settingsOpen) root.activateSelection()
+      onCloseRequested: {
+        if (root.settingsOpen) root.showSettings(false)
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
+        if (root.settingsOpen) return
         if (text === "r" || text === "R") service.refresh()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
@@ -423,9 +494,19 @@ Panel {
         else if (text === "n" || text === "N") root.toggleNotify()
       }
 
+      transform: Rotation {
+        id: cardRotation
+        origin.x: keyCatcher.width / 2
+        origin.y: keyCatcher.height / 2
+        axis.x: 0
+        axis.y: 1
+        axis.z: 0
+      }
+
       ColumnLayout {
         id: content
         anchors.fill: parent
+        visible: !root.settingsOpen
         spacing: Style.space(12)
 
         Column {
@@ -449,7 +530,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: notifySwitch.left
+              anchors.right: settingsButton.left
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -474,25 +555,16 @@ Panel {
               }
             }
 
-            // New-mail toasts, persisted on the bar entry; `hey setup omarchy
-            // --notify` and `omarchy bar set 37signals.hey notify true` flip the
-            // same key.
-            ToggleSwitch {
-              id: notifySwitch
+            PanelActionButton {
+              id: settingsButton
               anchors.right: refreshButton.left
-              anchors.rightMargin: Style.space(8)
+              anchors.rightMargin: Style.space(4)
               anchors.verticalCenter: parent.verticalCenter
-              visible: !root.needsSetup
-              checked: service.notify
+              iconText: "󰒓"
+              tooltipText: "HEY settings"
               foreground: root.foreground
-              trackHeight: Style.space(18)
-              onToggled: root.toggleNotify()
-
-              PanelToolTip {
-                visible: notifySwitch.containsMouse
-                text: service.notify ? "New-mail notifications on" : "New-mail notifications off"
-                fontFamily: root.fontFamily
-              }
+              fontFamily: root.fontFamily
+              onClicked: root.showSettings(true)
             }
 
             PanelActionButton {
@@ -850,6 +922,126 @@ Panel {
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+      }
+
+      ColumnLayout {
+        id: settingsPage
+        anchors.fill: parent
+        visible: root.settingsOpen
+        spacing: Style.space(12)
+        Keys.priority: Keys.AfterItem
+        Keys.onEscapePressed: function(event) {
+          root.showSettings(false)
+          event.accepted = true
+        }
+
+        Column {
+          id: settingsHeader
+          Layout.fillWidth: true
+          spacing: Style.space(12)
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(settingsBackButton.implicitHeight, settingsLabels.implicitHeight)
+
+            PanelActionButton {
+              id: settingsBackButton
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰁍"
+              tooltipText: "Back to email"
+              foreground: root.foreground
+              focusable: true
+              fontFamily: root.fontFamily
+              onClicked: root.showSettings(false)
+            }
+
+            Column {
+              id: settingsLabels
+              anchors.left: settingsBackButton.right
+              anchors.leftMargin: Style.space(10)
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(3)
+
+              Text {
+                text: "SETTINGS"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+            }
+          }
+
+          PanelSeparator {
+            foreground: root.foreground
+          }
+        }
+
+        Flickable {
+          id: settingsFlick
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          contentWidth: width
+          contentHeight: settingsContent.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          Column {
+            id: settingsContent
+            width: settingsFlick.width
+            spacing: Style.space(20)
+
+            Toggle {
+              id: notificationSetting
+              width: parent.width
+              label: "New-mail notifications"
+              description: "Show a desktop toast when new mail reaches the Imbox."
+              checked: service.notify
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.toggleNotify()
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "OPEN EMAILS IN"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: openActionDropdown
+                width: parent.width
+                showLabel: false
+                options: root.clickActionOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) {
+                  root.persistSettings({
+                    openAction: value,
+                    toastClickAction: undefined,
+                    emailClickAction: undefined
+                  })
+                }
+
+                Binding on value { value: service.openAction }
               }
             }
           }
