@@ -125,6 +125,8 @@ test("demo CLI accepts the terminal commands emitted by the plugin", () => {
   withState(stateDir => {
     for (const args of [
       ["tui", "--instance", "omarchy"],
+      ["tui", "--instance", "omarchy", "--screener"],
+      ["tui", "--instance", "omarchy", "--screener", "--remote"],
       ["--account", "1001", "tui", "--instance", "omarchy", "--topic", "501"],
       ["--account", "1001", "tui", "--instance", "omarchy", "--topic", "501", "--topic-title", "Plans for Friday", "--remote"]
     ]) {
@@ -147,6 +149,8 @@ test("demo CLI rejects commands outside the plugin contract", () => {
       ["bogus", "tui"],
       ["tui", "--instance", "other"],
       ["tui", "--instance", "omarchy", "--remote"],
+      ["tui", "--instance", "omarchy", "--topic", "501", "--screener"],
+      ["tui", "--instance", "omarchy", "--screener", "--topic-title", "Plans for Friday"],
       ["seen", "501", "--json"]
     ]) {
       const result = demo(args, stateDir)

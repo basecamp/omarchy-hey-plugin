@@ -432,6 +432,17 @@ Item {
     if (item.unread) markRead(item)
   }
 
+  function openScreener() {
+    if (openAction === "tui") {
+      Quickshell.execDetached(Model.tuiScreenerRemoteCommand())
+      Quickshell.execDetached(Model.tuiScreenerFocusCommand())
+    } else if (openAction === "app") {
+      Quickshell.execDetached(["omarchy-launch-webapp", Model.heyScreenerUrl])
+    } else {
+      Quickshell.execDetached(["xdg-open", Model.heyScreenerUrl])
+    }
+  }
+
   function markRead(item) {
     if (!item || !item.unread) return
     var current = null

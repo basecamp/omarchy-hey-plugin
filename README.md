@@ -12,7 +12,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - Shows the pending Screener count without including it in the unread count.
 - Updates live: the panel and the logo follow your Imbox as it changes, over HEY's own change feed — a thread you archive in `hey tui`, on your phone or in the web app leaves the panel within a second.
 - Toasts new mail when you turn notifications on — one notification per batch of changes at most, replaced rather than stacked, silenced by Omarchy's notification toggle.
-- Provides panel settings for the app that opens email and notification state.
+- Provides panel settings for the app that opens email and the Screener, and for notification state.
 - Shows sender initials in a colored avatar on each email row.
 - Opens email topics in HEY and marks unseen postings as seen.
 - Changes the bar logo color when unseen email exists.
@@ -62,7 +62,8 @@ Plugin removal unloads HEY and removes its checkout. The HEY CLI installation, i
 - Click an email to open it in HEY and mark it as seen. Click the count badge to mark it as seen without opening it.
 - Click the cog to flip the panel to its settings. The back arrow returns to email.
 - Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
-- Press `U` for new email, `P` for previously seen email, `S` for the Screener, `N` to toggle notifications, or `R` to refresh.
+- Click the Screener count or press `S` to open it in the destination selected under `OPEN EMAILS IN`.
+- Press `U` for new email, `P` for previously seen email, `N` to toggle notifications, or `R` to refresh.
 
 ## Demo data
 
@@ -122,6 +123,7 @@ hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
 hey seen <posting-id> [--account <id>] --json
 hey [--account <id>] tui --instance omarchy --topic <topic-id> [--remote]
+hey tui --instance omarchy --screener [--remote]
 flock -n <private runtime directory descriptor>
 omarchy-notification-send --app-name HEY -u low --exec <configured HEY terminal, app, or browser command> <headline> [description] -i hey -p [-r <id>]
 ```

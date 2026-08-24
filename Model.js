@@ -338,6 +338,7 @@ var toastIcon = "hey"
 var toastPreviewLimit = 96
 var toastFocusCommand = "omarchy-launch-or-focus-tui --app-id=org.omarchy.hey hey tui --instance omarchy"
 var heyWebUrl = "https://app.hey.com"
+var heyScreenerUrl = heyWebUrl + "/clearances"
 
 function topicIdFromUrl(value) {
   var match = boundedString(value, remoteUrlCharacterLimit).match(/\/topics\/(\d+)(?:[/?#]|$)/)
@@ -372,6 +373,14 @@ function tuiFocusCommand(topicId, accountId, title) {
   var topic = positiveId(topicId)
   if (topic > 0) command.push("--topic", String(topic))
   return command
+}
+
+function tuiScreenerRemoteCommand() {
+  return ["hey", "tui", "--instance", "omarchy", "--screener", "--remote"]
+}
+
+function tuiScreenerFocusCommand() {
+  return ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey", "tui", "--instance", "omarchy", "--screener"]
 }
 
 function shellCommand(command) {
@@ -841,6 +850,8 @@ if (typeof module !== "undefined") {
     topicIdFromUrl: topicIdFromUrl,
     tuiRemoteCommand: tuiRemoteCommand,
     tuiFocusCommand: tuiFocusCommand,
+    tuiScreenerRemoteCommand: tuiScreenerRemoteCommand,
+    tuiScreenerFocusCommand: tuiScreenerFocusCommand,
     tuiOpenCommand: tuiOpenCommand,
     heyBrowserUrl: heyBrowserUrl,
     toastAppName: toastAppName,
@@ -848,6 +859,7 @@ if (typeof module !== "undefined") {
     toastPreviewLimit: toastPreviewLimit,
     toastFocusCommand: toastFocusCommand,
     heyWebUrl: heyWebUrl,
+    heyScreenerUrl: heyScreenerUrl,
     toastReplaceWindowMs: toastReplaceWindowMs,
     parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
