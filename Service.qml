@@ -217,7 +217,9 @@ Item {
   }
 
   function accountsCommandUnavailable(stdout, stderr, commandName) {
-    var text = (String(stdout || "") + " " + String(stderr || "")).toLowerCase()
+    var raw = String(stdout || "") + " " + String(stderr || "")
+    var failure = Model.parseFailure(stdout, stderr)
+    var text = (raw + " " + String(failure.error || "")).toLowerCase()
     var name = String(commandName || "").toLowerCase()
     return text.indexOf("unknown command \"" + name + "\"") !== -1
       || text.indexOf("unknown command '" + name + "'") !== -1
