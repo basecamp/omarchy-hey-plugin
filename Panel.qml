@@ -867,7 +867,7 @@ Panel {
                       Text {
                         Layout.fillWidth: true
                         text: Model.notificationMeta(notificationRow.modelData, root.nowMs, root.accountFilter === "" && service.accountCount > 1)
-                        color: root.dim
+                        color: Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
