@@ -33,7 +33,7 @@
       {
         "key": "notify",
         "type": "boolean",
-        "label": "New-mail notifications",
+        "label": "Notifications",
         "defaultValue": false
       },
       {
