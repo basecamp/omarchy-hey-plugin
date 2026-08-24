@@ -1003,8 +1003,8 @@ Panel {
             Toggle {
               id: notificationSetting
               width: parent.width
-              label: "New-mail notifications"
-              description: "Show a desktop toast when new mail reaches the Imbox."
+              label: "Notifications"
+              description: "Show notification toasts on this computer when new email arrives."
               checked: service.notify
               foreground: root.foreground
               accent: Color.accent
