@@ -41,15 +41,15 @@ function setupPlan(installed, authenticated, ipcTarget) {
   var plan = {
     needed: installed !== true || authenticated !== true,
     title: "Please sign in",
-    command: "hey auth login",
+    command: "hey auth login --json >/dev/null",
     buttonLabel: "Sign in to HEY…",
-    fix: "hey auth login"
+    fix: "hey auth login --json >/dev/null"
   }
   if (installed !== true) {
     plan.title = ""
     plan.command = ""
     plan.buttonLabel = "Install HEY CLI…"
-    plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey auth login"
+    plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey auth login --json >/dev/null"
   }
   plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
   return plan
