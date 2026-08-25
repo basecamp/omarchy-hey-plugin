@@ -21,7 +21,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 ## Requirements
 
 - Omarchy with Quickshell plugin support.
-- [HEY CLI](https://github.com/basecamp/hey-cli) 0.2.2 or newer.
+- [HEY CLI](https://github.com/basecamp/hey-cli) (installed by the plugin if missing).
 - A HEY account.
 
 ## Installation
@@ -29,6 +29,8 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 ```bash
 omarchy plugin add https://github.com/basecamp/omarchy-hey-plugin.git --enable
 ```
+
+The plugin detects whether the HEY CLI is installed. If it is missing, the panel prompts you to install it and then starts guided setup.
 
 ## Updating
 
