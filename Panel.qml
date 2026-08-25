@@ -469,8 +469,7 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(430))
     contentHeight: panel.fittedContentHeight(root.settingsOpen
       ? settingsHeader.implicitHeight + settingsContent.implicitHeight + Style.space(24)
-      : (root.missingCli ? 0 : fixedContent.implicitHeight + Style.space(12))
-        + notificationContent.implicitHeight, Style.space(600))
+      : fixedContent.implicitHeight + notificationContent.implicitHeight + Style.space(12), Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -515,7 +514,6 @@ Panel {
 
         Column {
           id: fixedContent
-          visible: !root.missingCli
           Layout.fillWidth: true
           spacing: Style.space(12)
 
@@ -535,8 +533,8 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: settingsButton.left
-              anchors.rightMargin: Style.space(12)
+              anchors.right: root.missingCli ? parent.right : settingsButton.left
+              anchors.rightMargin: root.missingCli ? 0 : Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
 
@@ -563,6 +561,7 @@ Panel {
 
             PanelActionButton {
               id: settingsButton
+              visible: !root.missingCli
               anchors.right: refreshButton.left
               anchors.rightMargin: Style.space(4)
               anchors.verticalCenter: parent.verticalCenter
@@ -575,6 +574,7 @@ Panel {
 
             PanelActionButton {
               id: refreshButton
+              visible: !root.missingCli
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               iconText: service.refreshing ? "󰑓" : "󰑐"
