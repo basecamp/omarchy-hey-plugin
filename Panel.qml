@@ -447,10 +447,12 @@ Panel {
         }
       }
     }
-    tooltipText: service.refreshing
-      ? "Refreshing HEY email"
-      : (service.unreadCount === 1 ? "HEY · 1 new email" : "HEY · " + service.unreadCount + " new emails")
-        + (service.connected ? " · live" : "")
+    tooltipText: root.needsSetup
+      ? ""
+      : service.refreshing
+        ? "Refreshing HEY email"
+        : (service.unreadCount === 1 ? "HEY · 1 new email" : "HEY · " + service.unreadCount + " new emails")
+          + (service.connected ? " · live" : "")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
       else root.toggle()
