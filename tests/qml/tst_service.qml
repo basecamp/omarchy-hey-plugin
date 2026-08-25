@@ -224,7 +224,7 @@ TestCase {
     beginRefresh()
     findProbeProcess().complete(0, 'hey version 0.2.1\n{"ok":true,"data":{"authenticated":true}}', "")
     compare(service.cliOutdated, true)
-    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)")
     verify(findWatchProcess() === null || !findWatchProcess().running)
     // The panel still reads on the timer, degraded.
     verify(findHeyProcess("account").running)
@@ -681,7 +681,7 @@ TestCase {
     var watch = findWatchProcess()
 
     watch.complete(1, "", 'Error: unknown command "watch" for "hey"')
-    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)")
     compare(service.watchRestartScheduled, false)
   }
 
@@ -692,8 +692,8 @@ TestCase {
     // A CLI with hey watch but no `new` event refuses the command up front,
     // rather than running a watch that never says which threads are new.
     watch.complete(2, "", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}')
-    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy pkg aur add hey-cli)")
-    compare(service.watchError, "HEY CLI 0.2.2 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)")
+    compare(service.watchError, "HEY CLI 0.2.2 or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)")
     compare(service.watchRestartScheduled, false)
   }
 
@@ -727,7 +727,7 @@ TestCase {
   function test_box_reports_an_old_cli() {
     var box = refreshToBox(true)
     box.complete(1, "", '{"ok":false,"error":"unknown flag: --account","code":"usage"}')
-    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy pkg aur add hey-cli)")
+    compare(service.lastError, "HEY CLI 0.2.2 or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)")
     compare(service.refreshing, false)
   }
 

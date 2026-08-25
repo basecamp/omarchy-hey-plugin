@@ -34,9 +34,9 @@ test("setupPlan installs the HEY CLI before signing in", () => {
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "HEY CLI is required")
   assert.equal(plan.buttonLabel, "Install HEY CLI…")
-  assert.equal(plan.command, "omarchy pkg aur add hey-cli")
+  assert.equal(plan.command, "omarchy-mise-install github:basecamp/hey-cli hey")
   assert.equal(plan.launchCommand,
-    Model.setupLaunchCommand("omarchy-pkg-aur-add hey-cli && hey auth login", "37signals.hey"))
+    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey auth login", "37signals.hey"))
 })
 
 test("setupPlan is not needed when setup is complete", () => {

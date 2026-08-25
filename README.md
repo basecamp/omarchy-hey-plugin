@@ -40,7 +40,7 @@ Update the plugin checkout through Omarchy:
 omarchy plugin update 37signals.hey --yes
 ```
 
-HEY CLI updates arrive through the normal Omarchy package update process. The panel reports when the installed CLI is older than its minimum supported version.
+The panel reports when the installed HEY CLI is older than its minimum supported version.
 
 ## Removal
 
@@ -51,7 +51,7 @@ hey setup omarchy --remove
 omarchy plugin remove 37signals.hey --yes
 ```
 
-Plugin removal unloads HEY and removes its checkout. The HEY CLI package, its credential store, and the saved plugin settings in `~/.config/omarchy/shell.json` are separate and remain available for a future installation. Clear the stored HEY credentials with `hey auth logout`; if the CLI is no longer used elsewhere, remove its package separately through Omarchy's package manager.
+Plugin removal unloads HEY and removes its checkout. The HEY CLI installation, its credential store, and the saved plugin settings in `~/.config/omarchy/shell.json` are separate and remain available for a future installation. Clear the stored HEY credentials with `hey auth logout`; if the CLI is no longer used elsewhere, remove its mise installation separately.
 
 ## Usage
 
@@ -111,7 +111,9 @@ Every `added` and `updated` line `hey watch` writes says whether the thread is n
 The plugin runs these local CLI commands:
 
 ```text
+omarchy-mise-install github:basecamp/hey-cli hey
 hey --version
+hey auth login
 hey auth status --json
 hey account list --json
 hey accounts list --json  # HEY CLI 0.2.2 compatibility
