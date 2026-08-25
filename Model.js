@@ -46,8 +46,8 @@ function setupPlan(installed, authenticated, ipcTarget) {
     fix: "hey auth login"
   }
   if (installed !== true) {
-    plan.title = "HEY CLI is required"
-    plan.command = "omarchy-mise-install github:basecamp/hey-cli hey"
+    plan.title = ""
+    plan.command = ""
     plan.buttonLabel = "Install HEY CLI…"
     plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey auth login"
   }

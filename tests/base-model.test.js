@@ -36,15 +36,15 @@ test("setupPlan installs the HEY CLI before signing in", () => {
   const plan = Model.setupPlan(false, false, "37signals.hey")
 
   assert.equal(plan.needed, true)
-  assert.equal(plan.title, "HEY CLI is required")
+  assert.equal(plan.title, "")
   assert.equal(plan.buttonLabel, "Install HEY CLI…")
-  assert.equal(plan.command, "omarchy-mise-install github:basecamp/hey-cli hey")
+  assert.equal(plan.command, "")
   assert.equal(plan.launchCommand,
     Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey auth login", "37signals.hey"))
 })
 
 test("setupPlan prioritizes installation and is not needed when setup is complete", () => {
-  assert.equal(Model.setupPlan(false, true, "37signals.hey").title, "HEY CLI is required")
+  assert.equal(Model.setupPlan(false, true, "37signals.hey").buttonLabel, "Install HEY CLI…")
   assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
 })
 

@@ -123,6 +123,7 @@ Panel {
 
   readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, ipcTarget)
   readonly property bool needsSetup: service.probed && setupPlan.needed
+  readonly property bool missingCli: service.probed && service.installed !== true
 
   // Keep one setup flow active until its command reports completion. This
   // prevents a second browser login regardless of how long authentication
@@ -466,7 +467,8 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(430))
     contentHeight: panel.fittedContentHeight(root.settingsOpen
       ? settingsHeader.implicitHeight + settingsContent.implicitHeight + Style.space(24)
-      : fixedContent.implicitHeight + notificationContent.implicitHeight + Style.space(12), Style.space(600))
+      : (root.missingCli ? 0 : fixedContent.implicitHeight + Style.space(12))
+        + notificationContent.implicitHeight, Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -511,6 +513,7 @@ Panel {
 
         Column {
           id: fixedContent
+          visible: !root.missingCli
           Layout.fillWidth: true
           spacing: Style.space(12)
 
@@ -693,6 +696,7 @@ Panel {
               bottomPadding: Style.space(18)
 
               Text {
+                visible: root.setupPlan.title !== ""
                 width: parent.width
                 text: root.setupPlan.title
                 color: root.foreground
@@ -718,6 +722,7 @@ Panel {
               }
 
               Item {
+                visible: root.setupPlan.command !== ""
                 width: parent.width
                 implicitHeight: setupCommandRow.implicitHeight + Style.space(4)
 
