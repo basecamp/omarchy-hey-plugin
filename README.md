@@ -26,34 +26,9 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 
 ## Installation
 
-Install the CLI from the AUR, enable the plugin, complete HEY's guided setup, and add the CLI's Omarchy desktop integration:
-
 ```bash
-omarchy pkg aur add hey-cli
 omarchy plugin add https://github.com/basecamp/omarchy-hey-plugin.git --enable
-hey
-hey setup omarchy
 ```
-
-The first `hey` run signs in through the browser and shows the accounts linked to your HEY identity. `hey setup omarchy` adds the HEY Terminal UI launcher, SUPER+SPACE menu entry, and theme template. Use `hey setup omarchy --notify` instead to turn on new-mail notifications during desktop setup; they remain off by default and can also be enabled from the panel settings.
-
-When the HEY CLI is missing or signed out, the panel shows a setup button that installs the AUR package or opens HEY sign-in in a floating terminal. The panel detects completion automatically. You can also copy the displayed command and run it yourself.
-
-Confirm that the CLI can see your Imbox:
-
-```bash
-hey box imbox
-```
-
-The plugin uses the CLI's existing credential store. Credentials stay managed by the HEY CLI; the plugin never reads a token.
-
-For a local checkout, pass its path instead:
-
-```bash
-omarchy plugin add ~/code/basecamp/omarchy-hey-plugin --enable
-```
-
-The plugin manifest declares the right bar section as its default placement.
 
 ## Updating
 
@@ -63,7 +38,7 @@ Update the plugin checkout through Omarchy:
 omarchy plugin update 37signals.hey --yes
 ```
 
-HEY CLI updates arrive through the normal Omarchy and AUR package update process. The panel reports when the installed CLI is older than its minimum supported version.
+HEY CLI updates arrive through the normal Omarchy package update process. The panel reports when the installed CLI is older than its minimum supported version.
 
 ## Removal
 
