@@ -47,9 +47,9 @@ function setupPlan(installed, authenticated, ipcTarget) {
   }
   if (installed !== true) {
     plan.title = "HEY CLI is required"
-    plan.command = "omarchy pkg aur add hey-cli"
+    plan.command = "omarchy-mise-install github:basecamp/hey-cli hey"
     plan.buttonLabel = "Install HEY CLI…"
-    plan.fix = "omarchy-pkg-aur-add hey-cli && hey auth login"
+    plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey auth login"
   }
   plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
   return plan
@@ -202,7 +202,7 @@ function isAuthError(code) {
 }
 
 var minimumCliVersion = "0.2.2"
-var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy pkg aur add hey-cli)"
+var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)"
 
 // The probe answers three questions in one process — is the CLI there, is it
 // new enough, is it signed in — by printing the version line ahead of the
