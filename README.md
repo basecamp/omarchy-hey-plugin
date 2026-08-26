@@ -113,7 +113,7 @@ The plugin runs these local CLI commands:
 ```text
 omarchy-mise-install github:basecamp/hey-cli hey
 hey --version
-hey auth login --json > /dev/null
+hey setup --silent-success
 hey auth status --json
 hey account list --json
 hey accounts list --json  # HEY CLI 0.2.2 compatibility

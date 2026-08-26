@@ -175,9 +175,11 @@ def main():
     args = sys.argv[1:]
 
     if args == ["--version"]:
-        print("hey version 0.2.2")
+        print("hey version 1.2.0")
     elif args == ["auth", "status", "--json"]:
         auth_status()
+    elif args == ["setup", "--silent-success"]:
+        print("SETUP COMPLETE")
     elif args in (["account", "list", "--json"], ["accounts", "list", "--json"]):
         list_accounts(fixture)
     elif args in (

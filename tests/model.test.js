@@ -17,30 +17,41 @@ function waitForProcessExitSync(pid, attempts = 200) {
   }
 }
 
-test("setupPlan signs in when the HEY CLI is installed", () => {
-  const plan = Model.setupPlan(true, false, "37signals.hey")
+test("setupPlan signs in when the HEY CLI is installed and current", () => {
+  const plan = Model.setupPlan(true, false, false, "37signals.hey")
 
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "Please sign in")
   assert.equal(plan.buttonLabel, "Sign in to HEY…")
-  assert.equal(plan.command, "hey auth login --json >/dev/null")
+  assert.equal(plan.command, "hey setup --silent-success")
   assert.equal(plan.launchCommand,
-    Model.setupLaunchCommand("hey auth login --json >/dev/null", "37signals.hey"))
+    Model.setupLaunchCommand("hey setup --silent-success", "37signals.hey"))
 })
 
 test("setupPlan installs the HEY CLI before signing in", () => {
-  const plan = Model.setupPlan(false, false, "37signals.hey")
+  const plan = Model.setupPlan(false, false, false, "37signals.hey")
 
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "")
   assert.equal(plan.buttonLabel, "Install HEY CLI…")
   assert.equal(plan.command, "")
   assert.equal(plan.launchCommand,
-    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey auth login --json >/dev/null", "37signals.hey"))
+    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success", "37signals.hey"))
+})
+
+test("setupPlan updates an outdated signed-out CLI before setup", () => {
+  const plan = Model.setupPlan(true, false, true, "37signals.hey")
+
+  assert.equal(plan.needed, true)
+  assert.equal(plan.title, "")
+  assert.equal(plan.buttonLabel, "Update HEY CLI…")
+  assert.equal(plan.command, "")
+  assert.equal(plan.launchCommand,
+    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success", "37signals.hey"))
 })
 
 test("setupPlan is not needed when setup is complete", () => {
-  assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
+  assert.equal(Model.setupPlan(true, true, false, "37signals.hey").needed, false)
 })
 
 test("setupLockCheckCommand uses a private runtime directory without a /tmp fallback", () => {
@@ -222,7 +233,7 @@ test("cliTooOld recognizes a CLI without hey watch, hey box --account or --event
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
-  assert.match(Model.cliTooOldMessage, /0\.2\.2/)
+  assert.match(Model.cliTooOldMessage, /1\.2\.0/)
 })
 
 test("probeCommand asks for the version ahead of the auth status through a bounded capture", () => {
@@ -246,9 +257,11 @@ test("cliVersionTooOld holds a release below the minimum against the CLI, and no
   assert.equal(Model.cliVersionTooOld("v0.1.9"), true)
   assert.equal(Model.cliVersionTooOld("0.2.0"), true)
   assert.equal(Model.cliVersionTooOld("0.2.1"), true)
-  assert.equal(Model.cliVersionTooOld("0.2.2"), false)
-  assert.equal(Model.cliVersionTooOld("0.10.0"), false)
-  assert.equal(Model.cliVersionTooOld("1.0.0"), false)
+  assert.equal(Model.cliVersionTooOld("0.2.2"), true)
+  assert.equal(Model.cliVersionTooOld("0.10.0"), true)
+  assert.equal(Model.cliVersionTooOld("1.0.0"), true)
+  assert.equal(Model.cliVersionTooOld("1.1.0"), true)
+  assert.equal(Model.cliVersionTooOld("1.2.0"), false)
   assert.equal(Model.cliVersionTooOld("dev"), false)
   assert.equal(Model.cliVersionTooOld(""), false)
 })

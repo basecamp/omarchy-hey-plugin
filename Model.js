@@ -1,7 +1,7 @@
-// One place for the setup-state UI contract: which state wins (missing CLI
-// beats signed-out), the user-facing strings, and the exact shell command
-// the panel launches in a floating terminal. The launch command preserves
-// the fix's exit status through the IPC refresh so the terminal
+// One place for the setup-state UI contract: CLI installation and version
+// readiness precede sign-in. The plan provides the user-facing strings and
+// exact shell command the panel launches in a floating terminal. The launch
+// command preserves the fix's exit status through the IPC refresh so the terminal
 // presentation can honor Ctrl-C (exit 130) from the fix itself.
 var setupLockDirectoryName = "setup-lock"
 var setupLockShell = "uid=$(id -u) || exit 76; "
@@ -37,19 +37,19 @@ function setupLaunchCommand(fix, ipcTarget) {
     + String(fix || "") + " ) 9<\"$lock\""
 }
 
-function setupPlan(installed, authenticated, ipcTarget) {
+function setupPlan(installed, authenticated, cliOutdated, ipcTarget) {
   var plan = {
-    needed: installed !== true || authenticated !== true,
+    needed: installed !== true || cliOutdated === true || authenticated !== true,
     title: "Please sign in",
-    command: "hey auth login --json >/dev/null",
+    command: "hey setup --silent-success",
     buttonLabel: "Sign in to HEY…",
-    fix: "hey auth login --json >/dev/null"
+    fix: "hey setup --silent-success"
   }
-  if (installed !== true) {
+  if (installed !== true || cliOutdated === true) {
     plan.title = ""
     plan.command = ""
-    plan.buttonLabel = "Install HEY CLI…"
-    plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey auth login --json >/dev/null"
+    plan.buttonLabel = installed === true ? "Update HEY CLI…" : "Install HEY CLI…"
+    plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success"
   }
   plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)
   return plan
@@ -201,7 +201,7 @@ function isAuthError(code) {
   return value === "auth" || value === "auth_required"
 }
 
-var minimumCliVersion = "0.2.2"
+var minimumCliVersion = "1.2.0"
 var cliTooOldMessage = "HEY CLI " + minimumCliVersion + " or newer is required (omarchy-mise-install github:basecamp/hey-cli hey)"
 
 // The probe answers three questions in one process — is the CLI there, is it
@@ -248,11 +248,9 @@ function parseSemver(version) {
   return match ? [parseInt(match[1], 10), parseInt(match[2], 10), parseInt(match[3], 10)] : null
 }
 
-// An older CLI trips over a flag it does not have — `hey box --account` is
-// 0.2.0 — or an event it does not know — `hey watch --events new` is 0.2.0
-// too — and a release older still has no `hey watch` and reports an unknown
-// command. HEY CLI 0.2.2 adds topic deep links for terminal clicks. The plugin only
-// ever passes fixed flags, so any unknown one means the CLI is too old.
+// The minimum CLI provides `hey setup --silent-success`, account-aware Imbox
+// reads, live new-mail events, and topic deep links. The plugin only passes
+// fixed flags, so an unknown command, flag, or event means the CLI is too old.
 function cliTooOld(stdout, stderr) {
   var errorText = boundedString(stderr || "", remoteErrorCharacterLimit)
   var outputText = boundedString(stdout || "", remoteErrorCharacterLimit)
