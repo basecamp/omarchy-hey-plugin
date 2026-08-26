@@ -1,7 +1,7 @@
-// One place for the setup-state UI contract: which state wins (missing CLI
-// beats signed-out), the user-facing strings, and the exact shell command
-// the panel launches in a floating terminal. The launch command preserves
-// the fix's exit status through the IPC refresh so the terminal
+// One place for the setup-state UI contract: CLI installation and version
+// readiness precede sign-in. The plan provides the user-facing strings and
+// exact shell command the panel launches in a floating terminal. The launch
+// command preserves the fix's exit status through the IPC refresh so the terminal
 // presentation can honor Ctrl-C (exit 130) from the fix itself.
 var setupLockDirectoryName = "setup-lock"
 var setupLockShell = "uid=$(id -u) || exit 76; "
@@ -37,18 +37,18 @@ function setupLaunchCommand(fix, ipcTarget) {
     + String(fix || "") + " ) 9<\"$lock\""
 }
 
-function setupPlan(installed, authenticated, ipcTarget) {
+function setupPlan(installed, authenticated, cliOutdated, ipcTarget) {
   var plan = {
-    needed: installed !== true || authenticated !== true,
+    needed: installed !== true || cliOutdated === true || authenticated !== true,
     title: "Please sign in",
     command: "hey setup --silent-success",
     buttonLabel: "Sign in to HEY…",
     fix: "hey setup --silent-success"
   }
-  if (installed !== true) {
+  if (installed !== true || cliOutdated === true) {
     plan.title = ""
     plan.command = ""
-    plan.buttonLabel = "Install HEY CLI…"
+    plan.buttonLabel = installed === true ? "Update HEY CLI…" : "Install HEY CLI…"
     plan.fix = "omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success"
   }
   plan.launchCommand = setupLaunchCommand(plan.fix, ipcTarget)

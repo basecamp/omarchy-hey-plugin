@@ -121,7 +121,7 @@ Panel {
     return "No previously seen email."
   }
 
-  readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, ipcTarget)
+  readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, service.cliOutdated, ipcTarget)
   readonly property bool needsSetup: service.probed && setupPlan.needed
   readonly property bool missingCli: service.probed && service.installed !== true
 

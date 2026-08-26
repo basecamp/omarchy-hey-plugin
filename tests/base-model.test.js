@@ -21,8 +21,8 @@ function posting(overrides = {}) {
   }
 }
 
-test("setupPlan signs in when the HEY CLI is installed", () => {
-  const plan = Model.setupPlan(true, false, "37signals.hey")
+test("setupPlan signs in when the HEY CLI is installed and current", () => {
+  const plan = Model.setupPlan(true, false, false, "37signals.hey")
 
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "Please sign in")
@@ -33,7 +33,7 @@ test("setupPlan signs in when the HEY CLI is installed", () => {
 })
 
 test("setupPlan installs the HEY CLI before signing in", () => {
-  const plan = Model.setupPlan(false, false, "37signals.hey")
+  const plan = Model.setupPlan(false, false, false, "37signals.hey")
 
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "")
@@ -43,9 +43,18 @@ test("setupPlan installs the HEY CLI before signing in", () => {
     Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success", "37signals.hey"))
 })
 
+test("setupPlan updates an outdated signed-out CLI before setup", () => {
+  const plan = Model.setupPlan(true, false, true, "37signals.hey")
+
+  assert.equal(plan.needed, true)
+  assert.equal(plan.buttonLabel, "Update HEY CLI…")
+  assert.equal(plan.launchCommand,
+    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success", "37signals.hey"))
+})
+
 test("setupPlan prioritizes installation and is not needed when setup is complete", () => {
-  assert.equal(Model.setupPlan(false, true, "37signals.hey").buttonLabel, "Install HEY CLI…")
-  assert.equal(Model.setupPlan(true, true, "37signals.hey").needed, false)
+  assert.equal(Model.setupPlan(false, true, false, "37signals.hey").buttonLabel, "Install HEY CLI…")
+  assert.equal(Model.setupPlan(true, true, false, "37signals.hey").needed, false)
 })
 
 test("setupLockCheckCommand uses a private runtime directory without a /tmp fallback", () => {
