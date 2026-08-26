@@ -43,10 +43,14 @@ test("demo CLI fixtures follow the production HEY contracts", () => {
   withState(stateDir => {
     const version = demo(["--version"], stateDir)
     assert.equal(version.status, 0, version.stderr)
-    assert.equal(version.stdout.trim(), "hey version 0.2.2")
+    assert.equal(version.stdout.trim(), "hey version 1.2.0")
 
     const auth = successfulJson(["auth", "status", "--json"], stateDir)
     assert.equal(auth.data.authenticated, true)
+
+    const setup = demo(["setup", "--silent-success"], stateDir)
+    assert.equal(setup.status, 0, setup.stderr)
+    assert.equal(setup.stdout.trim(), "SETUP COMPLETE")
 
     let accounts
     for (const command of ["account", "accounts"]) {

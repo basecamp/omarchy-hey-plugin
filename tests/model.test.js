@@ -23,9 +23,9 @@ test("setupPlan signs in when the HEY CLI is installed", () => {
   assert.equal(plan.needed, true)
   assert.equal(plan.title, "Please sign in")
   assert.equal(plan.buttonLabel, "Sign in to HEY…")
-  assert.equal(plan.command, "hey auth login --json >/dev/null")
+  assert.equal(plan.command, "hey setup --silent-success")
   assert.equal(plan.launchCommand,
-    Model.setupLaunchCommand("hey auth login --json >/dev/null", "37signals.hey"))
+    Model.setupLaunchCommand("hey setup --silent-success", "37signals.hey"))
 })
 
 test("setupPlan installs the HEY CLI before signing in", () => {
@@ -36,7 +36,7 @@ test("setupPlan installs the HEY CLI before signing in", () => {
   assert.equal(plan.buttonLabel, "Install HEY CLI…")
   assert.equal(plan.command, "")
   assert.equal(plan.launchCommand,
-    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey auth login --json >/dev/null", "37signals.hey"))
+    Model.setupLaunchCommand("omarchy-mise-install github:basecamp/hey-cli hey && hey setup --silent-success", "37signals.hey"))
 })
 
 test("setupPlan is not needed when setup is complete", () => {
@@ -222,7 +222,7 @@ test("cliTooOld recognizes a CLI without hey watch, hey box --account or --event
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown flag: --account","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"unknown event \\"new\\" — pass any of added, updated, deleted","code":"usage"}'), true)
   assert.equal(Model.cliTooOld("", '{"ok":false,"error":"network error","code":"network"}'), false)
-  assert.match(Model.cliTooOldMessage, /0\.2\.2/)
+  assert.match(Model.cliTooOldMessage, /1\.2\.0/)
 })
 
 test("probeCommand asks for the version ahead of the auth status through a bounded capture", () => {
@@ -246,9 +246,11 @@ test("cliVersionTooOld holds a release below the minimum against the CLI, and no
   assert.equal(Model.cliVersionTooOld("v0.1.9"), true)
   assert.equal(Model.cliVersionTooOld("0.2.0"), true)
   assert.equal(Model.cliVersionTooOld("0.2.1"), true)
-  assert.equal(Model.cliVersionTooOld("0.2.2"), false)
-  assert.equal(Model.cliVersionTooOld("0.10.0"), false)
-  assert.equal(Model.cliVersionTooOld("1.0.0"), false)
+  assert.equal(Model.cliVersionTooOld("0.2.2"), true)
+  assert.equal(Model.cliVersionTooOld("0.10.0"), true)
+  assert.equal(Model.cliVersionTooOld("1.0.0"), true)
+  assert.equal(Model.cliVersionTooOld("1.1.0"), true)
+  assert.equal(Model.cliVersionTooOld("1.2.0"), false)
   assert.equal(Model.cliVersionTooOld("dev"), false)
   assert.equal(Model.cliVersionTooOld(""), false)
 })
