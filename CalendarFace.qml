@@ -185,30 +185,17 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           iconText: "󰁍"
           tooltipText: "Back to email (Esc)"
-          foreground: backLabelMouse.containsMouse ? root.accent : root.foreground
+          foreground: root.foreground
           focusable: true
           fontFamily: root.fontFamily
           onClicked: root.closeRequested()
-        }
-
-        // The title is part of the same door: an arrow on its own is easy to
-        // miss, and the way back should be the thing the eye lands on first.
-        MouseArea {
-          id: backLabelMouse
-          anchors.left: backButton.left
-          anchors.right: headerLabels.left
-          anchors.top: parent.top
-          anchors.bottom: parent.bottom
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          acceptedButtons: Qt.NoButton
         }
 
         Column {
           id: headerLabels
           anchors.left: backButton.right
           anchors.leftMargin: Style.space(10)
-          anchors.right: todayButton.visible ? todayButton.left : refreshButton.left
+          anchors.right: mailButton.left
           anchors.rightMargin: Style.space(10)
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(3)
@@ -220,7 +207,7 @@ Item {
             Text {
               id: calendarTitle
               text: "CALENDAR"
-              color: titleMouse.containsMouse || backLabelMouse.containsMouse ? root.accent : root.foreground
+              color: titleMouse.containsMouse ? root.accent : root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
               font.bold: true
@@ -253,6 +240,18 @@ Item {
             font.pixelSize: Style.font.bodySmall
             elide: Text.ElideRight
           }
+        }
+
+        PanelActionButton {
+          id: mailButton
+          anchors.right: todayButton.visible ? todayButton.left : refreshButton.left
+          anchors.rightMargin: Style.space(4)
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: "󰇮"
+          tooltipText: "Back to email (Esc)"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.closeRequested()
         }
 
         PanelActionButton {

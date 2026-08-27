@@ -41,3 +41,18 @@ test("missing CLI state hides header actions", () => {
   assert.match(panel, /id:\s*settingsButton\s*visible:\s*!root\.missingCli/)
   assert.match(panel, /id:\s*refreshButton\s*visible:\s*!root\.missingCli/)
 })
+
+// Each face carries the door to the other in the same corner: the mail face has
+// a calendar button, the calendar face a mail button.
+test("the calendar face has a button back to email", () => {
+  const face = fs.readFileSync(path.join(__dirname, "..", "CalendarFace.qml"), "utf8")
+
+  assert.match(face, /id:\s*mailButton[\s\S]{0,400}?onClicked:\s*root\.closeRequested\(\)/)
+  assert.match(face, /id:\s*backButton[\s\S]{0,400}?onClicked:\s*root\.closeRequested\(\)/)
+  assert.match(face, /id:\s*titleMouse[\s\S]{0,300}?onClicked:\s*root\.closeRequested\(\)/)
+  assert.match(panel, /onCloseRequested:\s*root\.showFace\("mail"\)/)
+
+  // Nothing hoverable may sit on top of the back arrow: an overlay takes its
+  // hover and leaves the button looking inert.
+  assert.equal(/acceptedButtons:\s*Qt\.NoButton/.test(face), false)
+})
