@@ -26,3 +26,13 @@ test("remote account labels use the plain-text dropdown", () => {
   assertPlainText(dropdown, "text: root.currentLabel()")
   assertPlainText(dropdown, "text: root.optionLabel(modelData)")
 })
+
+test("settings email action uses the plain-text dropdown", () => {
+  assert.match(panel, /PlainTextDropdown\s*{\s*id:\s*openActionDropdown/)
+})
+
+test("plain-text dropdown flips upward near the bottom of the screen", () => {
+  assert.match(dropdown, /property bool openUpward/)
+  assert.match(dropdown, /function computePlacement/)
+  assert.match(dropdown, /trigger\.mapToItem\(trigger\.window\.contentItem/)
+})
