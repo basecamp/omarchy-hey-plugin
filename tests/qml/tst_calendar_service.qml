@@ -241,6 +241,15 @@ TestCase {
   function test_an_event_carries_the_day_and_time_it_was_written_for() {
     loadWindow([], [])
 
+    // The zone is read once and named on every clock time, because a time the
+    // CLI is given without one is read as UTC.
+    var zone = findProcess(function(command) {
+      return command.length > 2 && String(command[2]).indexOf("zoneinfo") !== -1
+    })
+    verify(zone !== null)
+    zone.complete(0, "America/New_York", "")
+    compare(service.timeZone, "America/New_York")
+
     verify(service.addEvent({
       title: "Design review", dayKey: "2026-09-04", startTime: "2pm", endTime: "", calendarId: "10", location: ""
     }))
@@ -248,7 +257,7 @@ TestCase {
     verify(write !== null)
     compare(Model.capturedCommandPayload(write.command),
       ["hey", "event", "add", "Design review", "--json", "--starts-on", "2026-09-04",
-        "--start-time", "14:00", "--calendar", "10"])
+        "--start-time", "14:00", "--time-zone", "America/New_York", "--calendar", "10"])
   }
 
   function test_an_event_with_no_time_is_all_day() {

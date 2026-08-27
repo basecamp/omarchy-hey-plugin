@@ -56,21 +56,70 @@ function todoCompleteArgs(id) {
   return ["hey", "todo", "complete", String(id || ""), "--json"]
 }
 
+// The same wall-clock time, expressed in UTC, with the day it lands on there.
+// Used only when the machine's zone could not be read.
+function asUtc(dayKeyValue, clock) {
+  var date = dayKeyToDate(dayKeyValue)
+  date.setHours(parseInt(clock.substring(0, 2), 10), parseInt(clock.substring(3, 5), 10), 0, 0)
+  return {
+    key: utcDayKey(date.getTime()),
+    clock: pad2(date.getUTCHours()) + ":" + pad2(date.getUTCMinutes())
+  }
+}
+
 // An event with no start time is all-day; a start time with no end time runs an
 // hour, which is the CLI's own default and so is left unsaid.
+//
+// A clock time is read in `--time-zone`, and while the CLI's help says that
+// defaults to the machine's zone, an omitted zone is read as UTC — an afternoon
+// meeting lands mid-morning. So the zone is always named. Where the machine's
+// zone could not be read, the times are converted here and sent as UTC: the
+// event is at the right instant, though HEY then records the zone it was
+// written in as UTC.
 function eventAddArgs(form) {
   var source = form && typeof form === "object" ? form : {}
   var args = ["hey", "event", "add", String(source.title || ""), "--json"]
-  if (isDayKey(source.dayKey)) args.push("--starts-on", source.dayKey)
-  if (isClockTime(source.startTime)) {
+  var timeZone = boundedText(source.timeZone, 60)
+  var day = isDayKey(source.dayKey) ? source.dayKey : ""
+
+  if (!isClockTime(source.startTime)) {
+    if (day !== "") args.push("--starts-on", day)
+    args.push("--all-day")
+  } else if (timeZone !== "") {
+    if (day !== "") args.push("--starts-on", day)
     args.push("--start-time", source.startTime)
     if (isClockTime(source.endTime)) args.push("--end-time", source.endTime)
+    args.push("--time-zone", timeZone)
   } else {
-    args.push("--all-day")
+    var startDay = day !== "" ? day : todayKey()
+    var start = asUtc(startDay, source.startTime)
+    args.push("--starts-on", start.key, "--start-time", start.clock)
+    if (isClockTime(source.endTime)) {
+      var end = asUtc(startDay, source.endTime)
+      // An end that crosses midnight in UTC needs the day it crosses onto.
+      if (end.key !== start.key) args.push("--ends-on", end.key)
+      args.push("--end-time", end.clock)
+    }
+    args.push("--time-zone", "UTC")
   }
+
   if (source.calendarId) args.push("--calendar", String(source.calendarId))
   if (source.location) args.push("--location", String(source.location))
   return args
+}
+
+// The machine's IANA zone, read from wherever it can be found. Anything that
+// does not look like a zone name is refused rather than passed to the CLI.
+var timeZoneCommand = ["bash", "-c",
+  'tz="${TZ:-}"; '
+  + '[ -n "$tz" ] || tz="$(timedatectl show -p Timezone --value 2>/dev/null)"; '
+  + '[ -n "$tz" ] || tz="$(readlink -f /etc/localtime 2>/dev/null | sed -n "s|.*/zoneinfo/||p")"; '
+  + 'printf %s "$tz"']
+
+function readTimeZone(text) {
+  var value = boundedText(text, 60)
+  if (value === "" || value === "n/a" || value.toLowerCase() === "local") return ""
+  return /^[A-Za-z][A-Za-z0-9+_-]*(\/[A-Za-z0-9+_-]+){0,2}$/.test(value) ? value : ""
 }
 
 function isClockTime(value) {
@@ -543,6 +592,275 @@ function writableCalendars(calendars) {
   return out
 }
 
+
+// ------------------------------------------------------------- quick add
+//
+// "Meeting with Bob on Thursday at 2pm" is how a person writes an event down,
+// and it is not what `hey event add` takes. This reads the day and the time out
+// of the sentence and leaves the rest as the title.
+//
+// Only phrases that read unambiguously are taken. Anything else stays in the
+// title and the event falls back to all day on the day being viewed — the panel
+// shows what it understood before anything is sent, so a phrase read the wrong
+// way is visible rather than surprising.
+
+var weekdayWords = {
+  sunday: 0, sun: 0,
+  monday: 1, mon: 1,
+  tuesday: 2, tue: 2, tues: 2,
+  wednesday: 3, wed: 3, weds: 3,
+  thursday: 4, thu: 4, thur: 4, thurs: 4,
+  friday: 5, fri: 5,
+  saturday: 6, sat: 6
+}
+
+var monthWords = {
+  january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4,
+  may: 5, june: 6, jun: 6, july: 7, jul: 7, august: 8, aug: 8,
+  september: 9, sep: 9, sept: 9, october: 10, oct: 10,
+  november: 11, nov: 11, december: 12, dec: 12
+}
+
+var weekdayPattern = "sunday|sun|monday|mon|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat"
+var monthPattern = "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec"
+
+function daysInMonth(year, month) {
+  return new Date(year, month, 0).getDate()
+}
+
+// A weekday names the next one on or after the day being viewed; "next" skips
+// a week past that. A day already past this year rolls to next year rather than
+// filing the event in the past.
+function weekdayOnOrAfter(fromKey, weekday, skipAWeek) {
+  var start = dayKeyToDate(fromKey)
+  var offset = (weekday - start.getDay() + 7) % 7
+  return addDays(fromKey, offset + (skipAWeek === true ? 7 : 0))
+}
+
+function monthDayKey(month, day, viewKey) {
+  var viewed = dayKeyToDate(viewKey)
+  var year = viewed.getFullYear()
+  if (day < 1 || month < 1 || month > 12 || day > daysInMonth(year, month)) return ""
+  var key = dayKey(year, month, day)
+  // A date that has already gone by belongs to next year, not to the past.
+  if (daysBetween(viewKey, key) < 0) {
+    if (day > daysInMonth(year + 1, month)) return ""
+    key = dayKey(year + 1, month, day)
+  }
+  return key
+}
+
+// Each reader answers the day it found and the span of text it read, so the
+// title can have that span cut out of it.
+function readDayPhrase(text, viewKey, nowMs) {
+  var today = todayKey(nowMs)
+  var patterns = [
+    {
+      // today, tonight, tomorrow
+      regex: /\b(today|tonight|tomorrow)\b/i,
+      resolve: function(match) {
+        return match[1].toLowerCase() === "tomorrow" ? addDays(today, 1) : today
+      }
+    },
+    {
+      // 2026-09-03
+      regex: /\b(\d{4})-(\d{2})-(\d{2})\b/,
+      resolve: function(match) {
+        var key = match[0]
+        return isDayKey(key) && dayKeyToDate(key).getDate() === parseInt(match[3], 10) ? key : ""
+      }
+    },
+    {
+      // on 9/3, 9/3/2026
+      regex: /\b(?:on\s+)?(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/,
+      resolve: function(match) {
+        var month = parseInt(match[1], 10)
+        var day = parseInt(match[2], 10)
+        if (match[3] === undefined) return monthDayKey(month, day, viewKey)
+        var year = parseInt(match[3], 10)
+        if (year < 100) year += 2000
+        if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) return ""
+        return dayKey(year, month, day)
+      }
+    },
+    {
+      // on September 3, Sep 3rd
+      regex: new RegExp("\\b(?:on\\s+)?(" + monthPattern + ")\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b", "i"),
+      resolve: function(match) {
+        return monthDayKey(monthWords[match[1].toLowerCase()], parseInt(match[2], 10), viewKey)
+      }
+    },
+    {
+      // on the 3rd of September, 3 September
+      regex: new RegExp("\\b(?:on\\s+)?(?:the\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(" + monthPattern + ")\\b", "i"),
+      resolve: function(match) {
+        return monthDayKey(monthWords[match[2].toLowerCase()], parseInt(match[1], 10), viewKey)
+      }
+    },
+    {
+      // in 3 days
+      regex: /\bin\s+(\d{1,2})\s+days?\b/i,
+      resolve: function(match) {
+        return addDays(today, parseInt(match[1], 10))
+      }
+    },
+    {
+      // on Thursday, next Thursday, this Thursday
+      regex: new RegExp("\\b(?:(on|next|this)\\s+)?(" + weekdayPattern + ")\\b", "i"),
+      resolve: function(match) {
+        var qualifier = String(match[1] || "").toLowerCase()
+        return weekdayOnOrAfter(viewKey, weekdayWords[match[2].toLowerCase()], qualifier === "next")
+      }
+    }
+  ]
+
+  for (var i = 0; i < patterns.length; i++) {
+    var match = text.match(patterns[i].regex)
+    if (!match) continue
+    var key = patterns[i].resolve(match)
+    if (!isDayKey(key)) continue
+    return { key: key, start: match.index, end: match.index + match[0].length }
+  }
+  return null
+}
+
+function clockFrom(hours, minutes, meridiem) {
+  var hour = hours
+  var suffix = String(meridiem || "").toLowerCase()
+  if (suffix === "pm" && hour < 12) hour += 12
+  if (suffix === "am" && hour === 12) hour = 0
+  if (hour > 23 || minutes > 59) return ""
+  return pad2(hour) + ":" + pad2(minutes)
+}
+
+// A bare number is a time only when something says so — "at 9", "9pm", "9:30".
+// Otherwise "Room 9" would become nine o'clock.
+function readTimePhrase(text) {
+  var patterns = [
+    {
+      // from 2 to 3pm, 2pm-3:30pm, 9-10am
+      regex: /\b(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|—|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i,
+      resolve: function(match) {
+        var endMeridiem = match[6]
+        // "2 to 3pm" means both are pm: an unqualified start borrows the end's
+        // half of the day, unless that would run the event backwards.
+        var startMeridiem = match[3] || endMeridiem
+        var start = clockFrom(parseInt(match[1], 10), match[2] === undefined ? 0 : parseInt(match[2], 10), startMeridiem)
+        var end = clockFrom(parseInt(match[4], 10), match[5] === undefined ? 0 : parseInt(match[5], 10), endMeridiem)
+        if (start === "" || end === "") return null
+        if (!match[3] && start > end) start = clockFrom(parseInt(match[1], 10), match[2] === undefined ? 0 : parseInt(match[2], 10), endMeridiem === "pm" ? "am" : "pm")
+        return { start: start, end: start < end ? end : "" }
+      }
+    },
+    {
+      // at noon, at midnight
+      regex: /\b(?:at\s+)?(noon|midday|midnight)\b/i,
+      resolve: function(match) {
+        return { start: match[1].toLowerCase() === "midnight" ? "00:00" : "12:00", end: "" }
+      }
+    },
+    {
+      // 2pm, 2:30 pm, at 2pm
+      regex: /\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i,
+      resolve: function(match) {
+        var start = clockFrom(parseInt(match[1], 10), match[2] === undefined ? 0 : parseInt(match[2], 10), match[3])
+        return start === "" ? null : { start: start, end: "" }
+      }
+    },
+    {
+      // at 14:00, at 9:30, at 9
+      regex: /\bat\s+(\d{1,2})(?::(\d{2}))?\b/i,
+      resolve: function(match) {
+        var start = clockFrom(parseInt(match[1], 10), match[2] === undefined ? 0 : parseInt(match[2], 10), "")
+        return start === "" ? null : { start: start, end: "" }
+      }
+    }
+  ]
+
+  for (var i = 0; i < patterns.length; i++) {
+    var match = text.match(patterns[i].regex)
+    if (!match) continue
+    var time = patterns[i].resolve(match)
+    if (!time) continue
+    return { start: time.start, end: time.end, from: match.index, to: match.index + match[0].length }
+  }
+  return null
+}
+
+// What is left once the day and the time have been lifted out. Connectives left
+// dangling by the cut go with them, so "Meeting with Bob on Thursday" does not
+// leave "Meeting with Bob on".
+function titleFrom(text, cuts) {
+  var ordered = cuts.slice().sort(function(a, b) { return b.start - a.start })
+  var remaining = text
+  for (var i = 0; i < ordered.length; i++) {
+    remaining = remaining.substring(0, ordered[i].start) + " " + remaining.substring(ordered[i].end)
+  }
+  return remaining
+    .replace(/\s+/g, " ")
+    .replace(/[\s,;]*\b(on|at|from|starting|starts)\b[\s,;]*$/i, "")
+    .replace(/^[\s,;-]+|[\s,;-]+$/g, "")
+    .trim()
+}
+
+// Reads a sentence into what `hey event add` takes. `viewDayKey` is the day the
+// panel is showing, which is where an event with no day in it goes.
+function parseQuickAdd(text, viewDayKey, nowMs) {
+  var source = boundedText(text, titleCharacterLimit)
+  var view = isDayKey(viewDayKey) ? viewDayKey : todayKey(nowMs)
+  var result = {
+    title: source,
+    dayKey: view,
+    startTime: "",
+    endTime: "",
+    matchedDay: false,
+    matchedTime: false
+  }
+  if (source === "") return result
+
+  var cuts = []
+  var time = readTimePhrase(source)
+  if (time) {
+    result.startTime = time.start
+    result.endTime = time.end
+    result.matchedTime = true
+    cuts.push({ start: time.from, end: time.to })
+  }
+
+  // The day is read from what the time did not claim, so "2 to 3pm" cannot have
+  // its digits read as a date as well.
+  var withoutTime = time
+    ? source.substring(0, time.from) + new Array(time.to - time.from + 1).join(" ") + source.substring(time.to)
+    : source
+  var day = readDayPhrase(withoutTime, view, nowMs)
+  if (day) {
+    result.dayKey = day.key
+    result.matchedDay = true
+    cuts.push({ start: day.start, end: day.end })
+  }
+
+  var title = titleFrom(source, cuts)
+  // A sentence that is nothing but a day and a time has no event in it; the
+  // words stay the title rather than being thrown away.
+  if (title === "") {
+    return { title: source, dayKey: view, startTime: "", endTime: "", matchedDay: false, matchedTime: false }
+  }
+  result.title = title
+  return result
+}
+
+// One line saying what a quick-add would create, so what was understood is
+// visible before it is sent.
+function quickAddSummary(parsed, use24Hour) {
+  if (!parsed || parsed.title === "") return ""
+  var when = parsed.startTime === ""
+    ? "All day"
+    : clockTime(dayKeyToDate(parsed.dayKey).getTime()
+        + parseInt(parsed.startTime.substring(0, 2), 10) * 3600000
+        + parseInt(parsed.startTime.substring(3, 5), 10) * 60000, use24Hour)
+  return dayTitleShort(parsed.dayKey) + " · " + when
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     windowBackDays: windowBackDays,
@@ -552,6 +870,9 @@ if (typeof module !== "undefined") {
     todoAddArgs: todoAddArgs,
     todoCompleteArgs: todoCompleteArgs,
     eventAddArgs: eventAddArgs,
+    timeZoneCommand: timeZoneCommand,
+    readTimeZone: readTimeZone,
+    asUtc: asUtc,
     isClockTime: isClockTime,
     normalizeClockTime: normalizeClockTime,
     dayKey: dayKey,
@@ -580,6 +901,10 @@ if (typeof module !== "undefined") {
     nextOccurrence: nextOccurrence,
     dayTitle: dayTitle,
     dayTitleShort: dayTitleShort,
+    parseQuickAdd: parseQuickAdd,
+    quickAddSummary: quickAddSummary,
+    readDayPhrase: readDayPhrase,
+    readTimePhrase: readTimePhrase,
     dayRelation: dayRelation,
     clockTime: clockTime,
     occurrenceTimeLabel: occurrenceTimeLabel,

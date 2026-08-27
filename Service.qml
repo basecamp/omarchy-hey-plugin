@@ -825,6 +825,10 @@ Item {
   property string _calendarsOutput: ""
   property string _calendarWriteOutput: ""
   property string _calendarWriteError: ""
+  // The machine's IANA zone, read once. A clock time the CLI is given without
+  // one is read as UTC, so this is what keeps an afternoon meeting in the
+  // afternoon.
+  property string timeZone: ""
   property var _calendarWriteQueue: []
   property var _calendarWriting: null
 
@@ -937,6 +941,11 @@ Item {
 
   // The calendar picker is only needed by the event form, so it is read the
   // first time the form is opened rather than on every refresh.
+  function ensureTimeZone() {
+    if (timeZone !== "" || timeZoneProcess.running) return
+    timeZoneProcess.running = true
+  }
+
   function ensureCalendars() {
     if (calendars.length > 0 || calendarsProcess.running || !calendarReady) return
     _calendarsOutput = ""
@@ -957,7 +966,8 @@ Item {
       startTime: Calendar.normalizeClockTime(form.startTime),
       endTime: Calendar.normalizeClockTime(form.endTime),
       calendarId: form.calendarId,
-      location: Model.boundedString(form.location, Model.remoteNameCharacterLimit).trim()
+      location: Model.boundedString(form.location, Model.remoteNameCharacterLimit).trim(),
+      timeZone: timeZone
     }
     queueCalendarWrite(Calendar.eventAddArgs(fields), "Adding the event…", "Could not add the event")
     return true
@@ -1029,7 +1039,22 @@ Item {
 
   // The bar's tooltip names the next event whether or not the panel has ever
   // been opened, so the first window is read as soon as the CLI is ready.
-  onCalendarReadyChanged: if (calendarReady && calendarUpdated.getTime() <= 0) refreshCalendar()
+  onCalendarReadyChanged: {
+    if (!calendarReady) return
+    ensureTimeZone()
+    if (calendarUpdated.getTime() <= 0) refreshCalendar()
+  }
+
+  Process {
+    id: timeZoneProcess
+    running: false
+    command: Calendar.timeZoneCommand
+    stdout: StdioCollector {
+      id: timeZoneStdout
+      waitForEnd: true
+      onStreamFinished: root.timeZone = Calendar.readTimeZone(text)
+    }
+  }
 
   Timer {
     id: calendarLoadSoon

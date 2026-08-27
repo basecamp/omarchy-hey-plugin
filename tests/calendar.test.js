@@ -340,22 +340,24 @@ test("a todo is added to a day only when one is asked for", () => {
 })
 
 test("an event with no start time is added as an all-day event", () => {
+  const zone = "America/New_York"
+
   assert.deepEqual(
-    Calendar.eventAddArgs({ title: "Sarah's birthday", dayKey: "2026-09-02" }),
+    Calendar.eventAddArgs({ title: "Sarah's birthday", dayKey: "2026-09-02", timeZone: zone }),
     ["hey", "event", "add", "Sarah's birthday", "--json", "--starts-on", "2026-09-02", "--all-day"])
 
   assert.deepEqual(
-    Calendar.eventAddArgs({ title: "Design review", dayKey: "2026-09-02", startTime: "14:00", endTime: "15:00", calendarId: 42 }),
+    Calendar.eventAddArgs({ title: "Design review", dayKey: "2026-09-02", startTime: "14:00", endTime: "15:00", calendarId: 42, timeZone: zone }),
     ["hey", "event", "add", "Design review", "--json", "--starts-on", "2026-09-02",
-      "--start-time", "14:00", "--end-time", "15:00", "--calendar", "42"])
+      "--start-time", "14:00", "--end-time", "15:00", "--time-zone", zone, "--calendar", "42"])
 
   // An end time without a start time is meaningless, and the CLI's own default
   // of an hour is left unsaid.
   assert.deepEqual(
-    Calendar.eventAddArgs({ title: "Standup", dayKey: "2026-09-02", startTime: "09:15" }),
-    ["hey", "event", "add", "Standup", "--json", "--starts-on", "2026-09-02", "--start-time", "09:15"])
+    Calendar.eventAddArgs({ title: "Standup", dayKey: "2026-09-02", startTime: "09:15", timeZone: zone }),
+    ["hey", "event", "add", "Standup", "--json", "--starts-on", "2026-09-02", "--start-time", "09:15", "--time-zone", zone])
   assert.deepEqual(
-    Calendar.eventAddArgs({ title: "Lunch", dayKey: "2026-09-02", endTime: "13:00" }),
+    Calendar.eventAddArgs({ title: "Lunch", dayKey: "2026-09-02", endTime: "13:00", timeZone: zone }),
     ["hey", "event", "add", "Lunch", "--json", "--starts-on", "2026-09-02", "--all-day"])
 })
 
@@ -413,4 +415,180 @@ test("a completed todo leaves the day", () => {
 test("an event is never read as completed", () => {
   const [event] = Calendar.readEvents([Object.assign({}, recycling, { completed_at: "2026-09-08T00:00:00Z" })])
   assert.equal(event.completed, false)
+})
+
+// "Meeting with Bob on Thursday at 2pm" is how a person writes an event down,
+// and it is not what `hey event add` takes.
+const THURSDAY = "2026-08-27"
+
+test("a quick add reads the day and the time out of the sentence", () => {
+  const parsed = Calendar.parseQuickAdd("Meeting with Bob on Thursday at 2pm", THURSDAY)
+
+  assert.equal(parsed.title, "Meeting with Bob")
+  assert.equal(parsed.dayKey, "2026-08-27")
+  assert.equal(parsed.startTime, "14:00")
+  assert.equal(parsed.endTime, "")
+  assert.equal(parsed.matchedDay, true)
+  assert.equal(parsed.matchedTime, true)
+})
+
+test("a sentence with no day or time goes on the day being viewed, all day", () => {
+  const parsed = Calendar.parseQuickAdd("Groceries", THURSDAY)
+
+  assert.equal(parsed.title, "Groceries")
+  assert.equal(parsed.dayKey, THURSDAY)
+  assert.equal(parsed.startTime, "")
+  assert.equal(parsed.matchedDay, false)
+  assert.equal(parsed.matchedTime, false)
+})
+
+test("the days a sentence can name", () => {
+  const day = text => Calendar.parseQuickAdd(text, THURSDAY).dayKey
+
+  assert.equal(day("Coffee today"), Calendar.todayKey())
+  assert.equal(day("Coffee tomorrow"), Calendar.addDays(Calendar.todayKey(), 1))
+  assert.equal(day("Coffee in 3 days"), Calendar.addDays(Calendar.todayKey(), 3))
+  assert.equal(day("Dentist on Sep 3"), "2026-09-03")
+  assert.equal(day("Dentist on September 3rd"), "2026-09-03")
+  assert.equal(day("Dentist on the 3rd of September"), "2026-09-03")
+  assert.equal(day("Dentist on 9/3"), "2026-09-03")
+  assert.equal(day("Dentist on 9/3/2027"), "2027-09-03")
+  assert.equal(day("Dentist on 2026-09-03"), "2026-09-03")
+})
+
+// A weekday names the next one on or after the day being viewed; "next" skips a
+// week past that.
+test("a weekday resolves forward from the day being viewed", () => {
+  const day = text => Calendar.parseQuickAdd(text, THURSDAY).dayKey
+
+  assert.equal(day("Sprint review on Friday"), "2026-08-28")
+  assert.equal(day("Sprint review on Monday"), "2026-08-31")
+  assert.equal(day("Standup Thursday"), "2026-08-27")
+  assert.equal(day("Standup next Thursday"), "2026-09-03")
+  assert.equal(day("Standup this Friday"), "2026-08-28")
+  assert.equal(day("Standup fri"), "2026-08-28")
+})
+
+// A date that has already gone by belongs to next year, not to the past.
+test("a month and day that has passed rolls to next year", () => {
+  assert.equal(Calendar.parseQuickAdd("Taxes on Jan 15", THURSDAY).dayKey, "2027-01-15")
+  assert.equal(Calendar.parseQuickAdd("Taxes on Feb 30", THURSDAY).matchedDay, false)
+})
+
+test("the times a sentence can name", () => {
+  const time = text => Calendar.parseQuickAdd(text, THURSDAY)
+
+  assert.equal(time("Call at 2pm").startTime, "14:00")
+  assert.equal(time("Call 2pm").startTime, "14:00")
+  assert.equal(time("Call at 2:30 pm").startTime, "14:30")
+  assert.equal(time("Call at 14:00").startTime, "14:00")
+  assert.equal(time("Call at 9").startTime, "09:00")
+  assert.equal(time("Lunch at noon").startTime, "12:00")
+  assert.equal(time("Party at midnight").startTime, "00:00")
+  assert.equal(time("Call at 12am").startTime, "00:00")
+  assert.equal(time("Call at 12pm").startTime, "12:00")
+})
+
+test("a range gives the event an end as well as a start", () => {
+  const range = Calendar.parseQuickAdd("Sprint review Friday 2-3pm", THURSDAY)
+
+  assert.equal(range.title, "Sprint review")
+  assert.equal(range.dayKey, "2026-08-28")
+  assert.equal(range.startTime, "14:00")
+  assert.equal(range.endTime, "15:00")
+
+  // An unqualified start borrows the end's half of the day.
+  assert.equal(Calendar.parseQuickAdd("Workshop from 2 to 4pm", THURSDAY).startTime, "14:00")
+  assert.equal(Calendar.parseQuickAdd("Workshop 9-10am", THURSDAY).startTime, "09:00")
+  assert.equal(Calendar.parseQuickAdd("Workshop 9am to 10am", THURSDAY).endTime, "10:00")
+})
+
+// A bare number is a time only when something says so, or "Room 9" becomes nine
+// o'clock.
+test("a bare number is not a time on its own", () => {
+  const parsed = Calendar.parseQuickAdd("Standup in room 9", THURSDAY)
+
+  assert.equal(parsed.matchedTime, false)
+  assert.equal(parsed.title, "Standup in room 9")
+})
+
+test("the words a day or time was read from leave the title", () => {
+  const title = text => Calendar.parseQuickAdd(text, THURSDAY).title
+
+  assert.equal(title("Meeting with Bob on Thursday at 2pm"), "Meeting with Bob")
+  assert.equal(title("Lunch tomorrow at noon"), "Lunch")
+  assert.equal(title("at 4pm Coffee with Sam"), "Coffee with Sam")
+  assert.equal(title("Dentist on Sep 3 at 8am"), "Dentist")
+})
+
+// A sentence that is nothing but a day and a time has no event in it.
+test("a sentence with nothing left over keeps its words", () => {
+  const parsed = Calendar.parseQuickAdd("Thursday at 2pm", THURSDAY)
+
+  assert.equal(parsed.title, "Thursday at 2pm")
+  assert.equal(parsed.startTime, "")
+  assert.equal(parsed.matchedTime, false)
+  assert.equal(Calendar.parseQuickAdd("", THURSDAY).title, "")
+})
+
+test("the quick add says what it would create", () => {
+  assert.equal(
+    Calendar.quickAddSummary(Calendar.parseQuickAdd("Meeting with Bob on Thursday at 2pm", THURSDAY), false),
+    "Thu, Aug 27 · 2:00 PM")
+  assert.equal(
+    Calendar.quickAddSummary(Calendar.parseQuickAdd("Meeting with Bob on Thursday at 2pm", THURSDAY), true),
+    "Thu, Aug 27 · 14:00")
+  assert.equal(
+    Calendar.quickAddSummary(Calendar.parseQuickAdd("Rio's birthday on Sep 12", THURSDAY), false),
+    "Sat, Sep 12 · All day")
+  assert.equal(Calendar.quickAddSummary(null, false), "")
+})
+
+// A clock time the CLI is given without a zone is read as UTC, whatever its
+// help says, so the zone is always named.
+test("an event carries the zone its clock time was written in", () => {
+  assert.deepEqual(
+    Calendar.eventAddArgs({ title: "Meeting with Bob", dayKey: "2026-08-27", startTime: "14:00", timeZone: "America/New_York" }),
+    ["hey", "event", "add", "Meeting with Bob", "--json", "--starts-on", "2026-08-27",
+      "--start-time", "14:00", "--time-zone", "America/New_York"])
+})
+
+// Where the machine's zone could not be read, the times are converted here and
+// sent as UTC: the same instant, named differently.
+test("without a zone the times are converted to UTC", () => {
+  const args = Calendar.eventAddArgs({ title: "Meeting", dayKey: "2026-08-27", startTime: "14:00", endTime: "15:00", timeZone: "" })
+  const start = Calendar.asUtc("2026-08-27", "14:00")
+
+  assert.equal(args[args.length - 1], "UTC")
+  assert.equal(args[args.indexOf("--start-time") + 1], start.clock)
+  assert.equal(args[args.indexOf("--starts-on") + 1], start.key)
+  assert.equal(args[args.indexOf("--end-time") + 1], Calendar.asUtc("2026-08-27", "15:00").clock)
+})
+
+// An end that crosses midnight in UTC needs the day it crosses onto.
+test("a UTC conversion that crosses midnight names the day it lands on", () => {
+  const args = Calendar.eventAddArgs({ title: "Late", dayKey: "2026-08-27", startTime: "23:30", endTime: "23:45", timeZone: "" })
+  const start = Calendar.asUtc("2026-08-27", "23:30")
+  const end = Calendar.asUtc("2026-08-27", "23:45")
+
+  assert.equal(args[args.indexOf("--starts-on") + 1], start.key)
+  assert.equal(args.indexOf("--ends-on") === -1, start.key === end.key)
+})
+
+// An all-day event has no clock time to place, so it names no zone.
+test("an all-day event names no zone", () => {
+  const args = Calendar.eventAddArgs({ title: "Birthday", dayKey: "2026-09-12", timeZone: "America/New_York" })
+
+  assert.deepEqual(args, ["hey", "event", "add", "Birthday", "--json", "--starts-on", "2026-09-12", "--all-day"])
+})
+
+test("only something shaped like a zone name is used", () => {
+  assert.equal(Calendar.readTimeZone("America/New_York"), "America/New_York")
+  assert.equal(Calendar.readTimeZone("  Europe/Oslo\n"), "Europe/Oslo")
+  assert.equal(Calendar.readTimeZone("America/Argentina/Buenos_Aires"), "America/Argentina/Buenos_Aires")
+  assert.equal(Calendar.readTimeZone("UTC"), "UTC")
+  assert.equal(Calendar.readTimeZone("n/a"), "")
+  assert.equal(Calendar.readTimeZone(""), "")
+  assert.equal(Calendar.readTimeZone("; rm -rf /"), "")
+  assert.equal(Calendar.readTimeZone("$(whoami)"), "")
 })

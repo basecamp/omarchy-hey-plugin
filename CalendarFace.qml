@@ -130,18 +130,21 @@ Item {
     var wasOpen = composer !== ""
     composer = ""
     eventTitleField.text = ""
-    eventTimeField.text = ""
     todoTitleField.text = ""
     if (wasOpen) focusRequested()
   }
 
+  // What the sentence in the field would create. Read on every keystroke so the
+  // panel can show it before anything is sent.
+  readonly property var quickAdd: Calendar.parseQuickAdd(eventTitleField.text, viewDayKey, nowMs)
+
   function submitEvent() {
     if (!service) return
     var added = service.addEvent({
-      title: eventTitleField.text,
-      dayKey: viewDayKey,
-      startTime: eventTimeField.text,
-      endTime: "",
+      title: quickAdd.title,
+      dayKey: quickAdd.dayKey,
+      startTime: quickAdd.startTime,
+      endTime: quickAdd.endTime,
       calendarId: calendarPicker.value,
       location: ""
     })
@@ -528,49 +531,27 @@ Item {
         }
       }
 
-      // Adding an event: a title, an optional time, and which calendar it is
-      // filed on. No time makes it an all-day event, which is what HEY does.
-      //
-      // Every row here is a RowLayout rather than a Row of measured widths: the
-      // segmented control and the calendar names are as wide as their text, and
-      // a width worked out by subtraction overlaps the moment that text grows.
+      // Adding an event: one line, written the way a person writes an event
+      // down. The day and the time are read out of the sentence and what was
+      // understood is shown underneath, so a phrase read the wrong way is
+      // visible before it is sent rather than after.
       ColumnLayout {
         visible: root.composer === "event"
         width: parent.width
         spacing: Style.space(8)
 
-        RowLayout {
+        TextField {
+          id: eventTitleField
           Layout.fillWidth: true
-          spacing: Style.space(8)
-
-          TextField {
-            id: eventTitleField
-            Layout.fillWidth: true
-            placeholderText: "New event on " + Calendar.dayTitleShort(root.viewDayKey)
-            foreground: root.foreground
-            accent: root.accent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            onAccepted: root.submitEvent()
-            Keys.onEscapePressed: function(event) {
-              root.closeComposer()
-              event.accepted = true
-            }
-          }
-
-          TextField {
-            id: eventTimeField
-            Layout.preferredWidth: Style.space(74)
-            placeholderText: "All day"
-            foreground: root.foreground
-            accent: root.accent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            onAccepted: root.submitEvent()
-            Keys.onEscapePressed: function(event) {
-              root.closeComposer()
-              event.accepted = true
-            }
+          placeholderText: "Meeting with Bob on Thursday at 2pm"
+          foreground: root.foreground
+          accent: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          onAccepted: root.submitEvent()
+          Keys.onEscapePressed: function(event) {
+            root.closeComposer()
+            event.accepted = true
           }
         }
 
@@ -578,28 +559,18 @@ Item {
           Layout.fillWidth: true
           spacing: Style.space(8)
 
-          Dropdown {
-            id: calendarPicker
-            visible: root.service && root.service.calendars.length > 1
+          // What the sentence resolved to. A day or time lifted out of it reads
+          // in the accent color; a fallback to the day on screen does not.
+          Text {
             Layout.fillWidth: true
-            showLabel: false
-            options: {
-              var out = []
-              var list = root.service ? root.service.calendars : []
-              for (var i = 0; i < list.length; i++) out.push({ value: String(list[i].id), label: list[i].name })
-              return out
-            }
-            foreground: root.foreground
-            background: Color.popups.background
-            accent: root.accent
-            fontFamily: root.fontFamily
-            value: root.defaultCalendarId
-          }
-
-          Item {
-            visible: !calendarPicker.visible
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
+            text: eventTitleField.text.trim() === ""
+              ? "The day on screen, all day, unless the words say otherwise"
+              : Calendar.quickAddSummary(root.quickAdd, root.use24Hour)
+            color: eventTitleField.text.trim() !== "" && (root.quickAdd.matchedDay || root.quickAdd.matchedTime)
+              ? root.accent : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
           }
 
           Button {
@@ -608,7 +579,7 @@ Item {
             foreground: root.accent
             fontFamily: root.fontFamily
             bordered: true
-            enabled: eventTitleField.text.trim() !== ""
+            enabled: root.quickAdd.title !== ""
             onClicked: root.submitEvent()
           }
 
@@ -621,15 +592,22 @@ Item {
           }
         }
 
-        Text {
-          visible: eventTimeField.text.trim() !== ""
-            && Calendar.normalizeClockTime(eventTimeField.text) === ""
+        Dropdown {
+          id: calendarPicker
+          visible: root.service && root.service.calendars.length > 1
           Layout.fillWidth: true
-          text: "That time did not read as a time — try 9, 9:30 or 2pm."
-          color: root.urgent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
+          showLabel: false
+          options: {
+            var out = []
+            var list = root.service ? root.service.calendars : []
+            for (var i = 0; i < list.length; i++) out.push({ value: String(list[i].id), label: list[i].name })
+            return out
+          }
+          foreground: root.foreground
+          background: Color.popups.background
+          accent: root.accent
+          fontFamily: root.fontFamily
+          value: root.defaultCalendarId
         }
       }
 
