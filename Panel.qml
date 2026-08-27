@@ -6,6 +6,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "Calendar.js" as Calendar
 
 Panel {
   id: root
@@ -18,8 +19,13 @@ Panel {
   property double nowMs: Date.now()
   property string accountFilter: ""
   property string stateFilter: "unread"
-  property bool settingsOpen: false
-  property bool pendingSettingsOpen: false
+  // The panel is a card with three faces. Mail is the front; the calendar and
+  // the settings each flip away from it and back, never straight into each
+  // other, so the way back is always the same gesture.
+  property string face: "mail"
+  property string pendingFace: "mail"
+  readonly property bool settingsOpen: face === "settings"
+  readonly property bool calendarOpen: face === "calendar"
 
   readonly property var clickActionOptions: [
     { value: "app", label: "HEY App" },
@@ -29,6 +35,16 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
+  // The logo's unread color. "urgent", "accent" and "foreground" follow the
+  // theme; a hex value is taken as written, for a bar that wants to say new
+  // mail in a color the theme has no token for.
+  readonly property color unreadColor: {
+    var token = String(root.setting("unreadColor", "urgent")).trim().toLowerCase()
+    if (token === "accent") return Color.accent
+    if (token === "foreground") return root.foreground
+    if (token === "" || token === "urgent") return root.urgent
+    return Style.colorFromHex(token, root.urgent)
+  }
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property var filteredNotifications: Model.filterNotifications(service.notifications, accountFilter, stateFilter)
   readonly property var accountFilterOptions: Model.accountFilterOptions(service.accounts)
@@ -55,6 +71,7 @@ Panel {
     return false
   }
 
+  property double barNowMs: Date.now()
   property int phraseIndex: 0
   readonly property var loadingPhrases: [
     "Walking to the mailbox",
@@ -121,6 +138,23 @@ Panel {
     return "No previously seen email."
   }
 
+  // What the bar says about the calendar: the next event still to come today,
+  // or why there is none to name.
+  readonly property string nextEventLine: {
+    if (!service.calendarReady) return "Calendar not loaded"
+    if (service.calendarUpdated.getTime() <= 0) {
+      return service.calendarLoading ? "Reading your calendar…" : "Calendar not loaded"
+    }
+    var today = Calendar.todayKey(barNowMs)
+    var occurrences = Calendar.occurrencesOn(service.calendarRecords, today)
+    var next = Calendar.nextOccurrence(occurrences, barNowMs)
+    if (next !== null) {
+      return "Next: " + Calendar.clockTime(next.startMs, root.setting("clock24Hour", false) === true)
+        + " · " + next.title
+    }
+    return occurrences.length === 0 ? "Nothing scheduled today" : "Nothing left today"
+  }
+
   readonly property var setupPlan: Model.setupPlan(service.installed, service.authenticated, service.cliOutdated, ipcTarget)
   readonly property bool needsSetup: service.probed && setupPlan.needed
   readonly property bool missingCli: service.probed && service.installed !== true
@@ -173,13 +207,23 @@ Panel {
     persistSettings({ notify: !service.notify })
   }
 
-  function showSettings(open) {
-    var next = open === true
-    if (settingsOpen === next || pageFlip.running) return
-    pendingSettingsOpen = next
+  function showFace(name) {
+    var next = String(name || "mail")
+    if (face === next || pageFlip.running) return
+    pendingFace = next
     accountDropdown.close()
     openActionDropdown.close()
     pageFlip.restart()
+  }
+
+  function showSettings(open) { showFace(open === true ? "settings" : "mail") }
+
+  function showCalendar(open) { showFace(open === true ? "calendar" : "mail") }
+
+  // Every face returns to mail, and mail closes the panel.
+  function backOrClose() {
+    if (face === "mail") close()
+    else showFace("mail")
   }
 
   property var avatarPalette: []
@@ -265,8 +309,8 @@ Panel {
   onOpenedChanged: {
     if (!opened) {
       pageFlip.stop()
-      settingsOpen = false
-      pendingSettingsOpen = false
+      face = "mail"
+      pendingFace = "mail"
       cardRotation.angle = 0
       return
     }
@@ -276,10 +320,19 @@ Panel {
     if (settingsFlick) settingsFlick.contentY = 0
     service.checkSetupRunning()
     service.refreshIfStale()
+    service.refreshCalendarIfStale()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   onFilteredNotificationsChanged: ensureSelection()
+
+  Timer {
+    interval: 30000
+    repeat: true
+    running: true
+    triggeredOnStart: true
+    onTriggered: root.barNowMs = Date.now()
+  }
 
   PointerMoveGate {
     id: pointerGate
@@ -378,9 +431,10 @@ Panel {
     }
     ScriptAction {
       script: {
-        root.settingsOpen = root.pendingSettingsOpen
+        root.face = root.pendingFace
         cardRotation.angle = -90
         if (root.settingsOpen && settingsFlick) settingsFlick.contentY = 0
+        if (root.calendarOpen) calendarFace.opened()
       }
     }
     NumberAnimation {
@@ -395,6 +449,7 @@ Panel {
       script: Qt.callLater(function() {
         if (root.settingsOpen) notificationSetting.forceActiveFocus()
         else keyCatcher.forceActiveFocus()
+        if (root.calendarOpen) calendarFace.focusDay()
       })
     }
   }
@@ -406,15 +461,36 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { root.broadcastRefresh(); return "ok" }
+    // One refresh is both faces: the bar icon speaks for the mail and the
+    // calendar alike.
+    function refresh(): string {
+      root.broadcastRefresh()
+      service.refreshCalendar()
+      return "ok"
+    }
     function setupFinished(): string {
       service.finishSetup()
       root.broadcastRefresh()
       return "ok"
     }
     function unread(): int { return service.unreadCount }
+    function calendar(): string { root.showFace("calendar"); return root.face }
+    function mail(): string { root.showFace("mail"); return root.face }
+    function day(key: string): string {
+      root.showFace("calendar")
+      calendarFace.goToDay(key)
+      return calendarFace.viewDayKey
+    }
     function status(): string {
       return JSON.stringify({
+        face: root.face,
+        day: calendarFace.viewDayKey,
+        dayRows: calendarFace.occurrences.length,
+        calendarLoaded: service.calendarRecords.length,
+        calendarWindow: service.calendarWindowStart + ".." + service.calendarWindowEnd,
+        calendarLoading: service.calendarLoading,
+        calendarUnexpandable: service.calendarUnexpandable,
+        calendarError: service.calendarError,
         accounts: service.accountCount,
         notifications: service.notifications.length,
         unread: service.unreadCount,
@@ -443,19 +519,27 @@ Panel {
         HeyIcon {
           anchors.centerIn: parent
           iconSize: Style.space(12)
-          color: service.unreadCount > 0 ? root.urgent : root.foreground
+          color: service.unreadCount > 0 ? root.unreadColor : root.foreground
         }
       }
     }
-    tooltipText: root.needsSetup
-      ? ""
-      : service.refreshing
-        ? "Refreshing HEY email"
-        : (service.unreadCount === 1 ? "HEY · 1 new email" : "HEY · " + service.unreadCount + " new emails")
-          + (service.connected ? " · live" : "")
+    tooltipText: {
+      if (root.needsSetup) return ""
+      var lines = []
+      if (service.refreshing) {
+        lines.push("Refreshing HEY email")
+      } else {
+        lines.push((service.unreadCount === 1 ? "1 new email" : service.unreadCount + " new emails")
+          + (service.connected ? " · live" : ""))
+      }
+      lines.push(root.nextEventLine)
+      return lines.join("\n")
+    }
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
-      else root.toggle()
+      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) {
+        service.refresh()
+        service.refreshCalendar()
+      } else root.toggle()
     }
   }
 
@@ -469,7 +553,9 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(430))
     contentHeight: panel.fittedContentHeight(root.settingsOpen
       ? settingsHeader.implicitHeight + settingsContent.implicitHeight + Style.space(24)
-      : fixedContent.implicitHeight + notificationContent.implicitHeight + Style.space(12), Style.space(600))
+      : root.calendarOpen
+        ? calendarFace.contentHeight
+        : fixedContent.implicitHeight + notificationContent.implicitHeight + Style.space(12), Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -477,20 +563,32 @@ Panel {
       // Settings controls own their native focus chain and keys. The page-level
       // Escape handler below returns to email after an open dropdown closes.
       blocked: root.settingsOpen || accountDropdown.popupOpen
+        || (root.calendarOpen && calendarFace.editing)
       onMoveRequested: function(dx, dy) {
         if (root.settingsOpen) return
+        if (root.calendarOpen) {
+          if (dx !== 0) calendarFace.stepDay(dx)
+          else if (dy !== 0) calendarFace.moveSelection(dy)
+          return
+        }
         if (dx !== 0) root.cycleAccountFilter(dx)
         else if (dy !== 0) root.moveSelection(dy)
       }
-      onActivateRequested: if (!root.settingsOpen) root.activateSelection()
-      onCloseRequested: {
-        if (root.settingsOpen) root.showSettings(false)
-        else root.close()
+      onActivateRequested: {
+        if (root.settingsOpen) return
+        if (root.calendarOpen) calendarFace.activateSelection()
+        else root.activateSelection()
       }
+      onCloseRequested: root.backOrClose()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (root.settingsOpen) return
-        if (text === "r" || text === "R") service.refresh()
+        if (root.calendarOpen) {
+          calendarFace.textKey(text)
+          return
+        }
+        if (text === "c" || text === "C") root.showCalendar(true)
+        else if (text === "r" || text === "R") service.refresh()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
         else if (text === "s" || text === "S") Qt.openUrlExternally("https://app.hey.com/clearances")
@@ -509,7 +607,7 @@ Panel {
       ColumnLayout {
         id: content
         anchors.fill: parent
-        visible: !root.settingsOpen
+        visible: root.face === "mail"
         spacing: Style.space(12)
 
         Column {
@@ -533,7 +631,9 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: root.missingCli ? parent.right : settingsButton.left
+              anchors.right: root.missingCli
+                ? parent.right
+                : calendarButton.visible ? calendarButton.left : settingsButton.left
               anchors.rightMargin: root.missingCli ? 0 : Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -557,6 +657,19 @@ Panel {
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
               }
+            }
+
+            PanelActionButton {
+              id: calendarButton
+              visible: !root.missingCli && !root.needsSetup
+              anchors.right: settingsButton.left
+              anchors.rightMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰃭"
+              tooltipText: "Calendar (C)"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.showCalendar(true)
             }
 
             PanelActionButton {
@@ -938,6 +1051,22 @@ Panel {
             }
           }
         }
+      }
+
+      CalendarFace {
+        id: calendarFace
+        anchors.fill: parent
+        visible: root.calendarOpen
+        service: root.service
+        bar: root.bar
+        foreground: root.foreground
+        urgent: root.urgent
+        accent: Color.accent
+        dim: root.dim
+        fontFamily: root.fontFamily
+        use24Hour: root.setting("clock24Hour", false) === true
+        onCloseRequested: root.showFace("mail")
+        onFocusRequested: Qt.callLater(function() { keyCatcher.forceActiveFocus() })
       }
 
       ColumnLayout {

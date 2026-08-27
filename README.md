@@ -1,6 +1,6 @@
 # HEY email for Omarchy
 
-A Quickshell bar plugin that shows unread and recent email from your HEY Imbox through the [HEY CLI](https://github.com/basecamp/hey-cli).
+A Quickshell bar plugin that shows unread and recent email from your HEY Imbox, and a day at a time of your HEY calendar, through the [HEY CLI](https://github.com/basecamp/hey-cli).
 
 ![HEY email panel for Omarchy](preview.png)
 
@@ -12,11 +12,17 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - Shows the pending Screener count without including it in the unread count.
 - Updates live: the panel and the logo follow your Imbox as it changes, over HEY's own change feed — a thread you archive in `hey tui`, on your phone or in the web app leaves the panel within a second.
 - Toasts new mail when you turn notifications on — one notification per batch of changes at most, replaced rather than stacked, silenced by Omarchy's notification toggle.
-- Provides panel settings for the app that opens email and notification state.
+- Provides panel settings for the app that opens email, notification state, the logo's unread color, and 24-hour times on the calendar.
 - Shows sender initials in a colored avatar on each email row.
 - Opens email topics in HEY and marks unseen postings as seen.
 - Changes the bar logo color when unseen email exists.
 - Rechecks the Imbox and Screener every 10 minutes as a fallback for the live connection. Right-click or middle-click the bar logo to refresh immediately.
+- Flips to a calendar: one day at a time, with an arrow either side of the date and the date itself as the way back to today.
+- Shows the day's events and the todos owed on it, each event in the color of the calendar it is filed on.
+- Expands repeating events onto the days they land on. HEY answers a repeat once, as its series; a schedule it describes in words rather than by name is left alone and said so, never guessed at.
+- Adds an event to the day being viewed, with a time or all day, on whichever calendar you pick.
+- Adds a todo for the week, and completes one from the panel.
+- Names the next event still to come today in the bar tooltip, under the unread count.
 
 ## Requirements
 
@@ -62,7 +68,34 @@ Plugin removal unloads HEY and removes its checkout. The HEY CLI installation, i
 - Click an email to open it in HEY and mark it as seen. Click the count badge to mark it as seen without opening it.
 - Click the cog to flip the panel to its settings. The back arrow returns to email.
 - Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
-- Press `U` for new email, `P` for previously seen email, `S` for the Screener, `N` to toggle notifications, or `R` to refresh.
+- Press `U` for new email, `P` for previously seen email, `S` for the Screener, `N` to toggle notifications, `C` for the calendar, or `R` to refresh.
+
+### Calendar
+
+- Click the calendar icon in the panel header, or press `C`, to flip the panel to the calendar. Click `← CALENDAR`, or press `Esc`, to flip back to email.
+- Use the left and right arrow keys, or the arrows either side of the date, to step a day. Press `T`, or click the date, to return to today.
+- Use the up and down arrow keys to move through the day. Press `Enter` on an event to open it in HEY, or on a todo to complete it.
+- Press `E` to add an event to the day being viewed, or `N` to add a todo. An event with no time is an all-day event; a time reads as `9`, `9:30` or `2pm`. A todo is filed for the week, the way HEY's own apps file one.
+- Press `R` to refresh, or right-click the bar logo to refresh both the email and the calendar.
+
+The calendar reads a window of days around the one being viewed, so stepping a
+day never waits on a request; stepping past the edge of the window reads again
+around the new day. Events and todos are read separately and shown together, and
+they commit together, so a day is never half a day.
+
+#### Repeating events
+
+`hey event list` answers a repeating event once, as its series, carrying the
+series' own start time whatever window is asked for — so the panel expands a
+repeat onto the days it lands on itself. HEY's own presets (`every_day`,
+`every_weekday`, `every_week`, `every_other_week`, `every_month`, `every_year`)
+are expanded by name, along with the handful of schedules HEY describes in words
+that read unambiguously, such as `monthly on the 11th day of the month`. A
+schedule that does not read that way is left unexpanded and counted in the
+panel's header, rather than being placed on days it might not belong to.
+
+Where HEY has materialized an occurrence of a series as a record of its own, the
+materialized one wins: it is what HEY actually holds, moves and edits included.
 
 ## Demo data
 
