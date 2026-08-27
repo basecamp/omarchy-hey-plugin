@@ -1,8 +1,17 @@
 {
   "accounts": [
-    { "id": 1001, "name": "Personal" },
-    { "id": 1002, "name": "Acme Design Co." },
-    { "id": 1003, "name": "Northstar Studio" }
+    {
+      "id": 1001,
+      "name": "Personal"
+    },
+    {
+      "id": 1002,
+      "name": "Acme Design Co."
+    },
+    {
+      "id": 1003,
+      "name": "Northstar Studio"
+    }
   ],
   "screener_count": 2,
   "postings": [
@@ -13,7 +22,10 @@
       "minutes_ago": 3,
       "name": "Plans for Friday",
       "summary": "Want to grab lunch around noon? I found a great spot near the office.",
-      "creator": { "name": "Sarah Evans", "initials": "SE" },
+      "creator": {
+        "name": "Sarah Evans",
+        "initials": "SE"
+      },
       "entry_kind": "email",
       "visible_entry_count": 2
     },
@@ -23,8 +35,11 @@
       "state": "unseen",
       "minutes_ago": 12,
       "name": "A quick review when you have a minute",
-      "summary": "The latest homepage draft is ready. I’d love your thoughts on the opening section.",
-      "creator": { "name": "Maya Chen", "initials": "MC" },
+      "summary": "The latest homepage draft is ready. I\u2019d love your thoughts on the opening section.",
+      "creator": {
+        "name": "Maya Chen",
+        "initials": "MC"
+      },
       "entry_kind": "email",
       "visible_entry_count": 1
     },
@@ -34,8 +49,11 @@
       "state": "unseen",
       "minutes_ago": 28,
       "name": "Welcome to the new studio",
-      "summary": "Here’s everything you need to know before we kick things off next week.",
-      "creator": { "name": "Jordan Lee", "initials": "JL" },
+      "summary": "Here\u2019s everything you need to know before we kick things off next week.",
+      "creator": {
+        "name": "Jordan Lee",
+        "initials": "JL"
+      },
       "entry_kind": "email",
       "visible_entry_count": 1
     },
@@ -45,8 +63,11 @@
       "state": "unseen",
       "minutes_ago": 46,
       "name": "Your train tickets are confirmed",
-      "summary": "You’re all set for the morning train. The itinerary is attached.",
-      "creator": { "name": "Northwind Travel", "initials": "NT" },
+      "summary": "You\u2019re all set for the morning train. The itinerary is attached.",
+      "creator": {
+        "name": "Northwind Travel",
+        "initials": "NT"
+      },
       "entry_kind": "email",
       "visible_entry_count": 1
     },
@@ -57,7 +78,10 @@
       "minutes_ago": 73,
       "name": "Re: Fall launch plan",
       "summary": "This sequence gives the team enough room to validate each milestone.",
-      "creator": { "name": "Eli Thompson", "initials": "ET" },
+      "creator": {
+        "name": "Eli Thompson",
+        "initials": "ET"
+      },
       "entry_kind": "email",
       "visible_entry_count": 3
     },
@@ -68,7 +92,10 @@
       "minutes_ago": 118,
       "name": "Photos from the workshop",
       "summary": "A few favorites from yesterday, plus the full-resolution folder.",
-      "creator": { "name": "Avery Brooks", "initials": "AB" },
+      "creator": {
+        "name": "Avery Brooks",
+        "initials": "AB"
+      },
       "entry_kind": "email",
       "visible_entry_count": 1
     },
@@ -79,7 +106,10 @@
       "minutes_ago": 210,
       "name": "Your August statement",
       "summary": "Your monthly statement is ready to view.",
-      "creator": { "name": "Summit Bank", "initials": "SB" },
+      "creator": {
+        "name": "Summit Bank",
+        "initials": "SB"
+      },
       "entry_kind": "email",
       "visible_entry_count": 1
     },
@@ -88,11 +118,177 @@
       "account_id": 1002,
       "state": "seen",
       "minutes_ago": 390,
-      "name": "Notes from today’s planning session",
+      "name": "Notes from today\u2019s planning session",
       "summary": "Everything from the discussion is captured here, including next steps.",
-      "creator": { "name": "Noah Williams", "initials": "NW" },
+      "creator": {
+        "name": "Noah Williams",
+        "initials": "NW"
+      },
       "entry_kind": "email",
       "visible_entry_count": 1
+    }
+  ],
+  "calendars": [
+    {
+      "id": 2001,
+      "kind": "normal",
+      "personal": true
+    },
+    {
+      "id": 2002,
+      "kind": "maybe",
+      "name": "Maybe",
+      "color": "black"
+    },
+    {
+      "id": 2003,
+      "kind": "normal",
+      "name": "Personal",
+      "color": "blue"
+    },
+    {
+      "id": 2004,
+      "kind": "normal",
+      "name": "Acme Design Co.",
+      "color": "green"
+    },
+    {
+      "id": 2005,
+      "kind": "normal",
+      "name": "Family",
+      "color": "purple"
+    }
+  ],
+  "events": [
+    {
+      "id": 3001,
+      "title": "Cover art review",
+      "days_from_today": 0,
+      "at": "09:30",
+      "minutes": 45,
+      "location": "Studio B",
+      "calendar": {
+        "id": 2004,
+        "name": "Acme Design Co.",
+        "color": "green"
+      }
+    },
+    {
+      "id": 3002,
+      "title": "Lunch with Sarah",
+      "days_from_today": 0,
+      "at": "12:00",
+      "minutes": 60,
+      "location": "The Corner Deli",
+      "calendar": {
+        "id": 2003,
+        "name": "Personal",
+        "color": "blue"
+      }
+    },
+    {
+      "id": 3003,
+      "title": "Pagination fix ships",
+      "days_from_today": 0,
+      "days": 1,
+      "calendar": {
+        "id": 2004,
+        "name": "Acme Design Co.",
+        "color": "green"
+      }
+    },
+    {
+      "id": 3004,
+      "title": "Weekly planning",
+      "days_from_today": 0,
+      "at": "16:00",
+      "minutes": 30,
+      "recurring": true,
+      "recurrence_schedule": {
+        "kind": "every_week",
+        "description": "every week"
+      },
+      "calendar": {
+        "id": 2004,
+        "name": "Acme Design Co.",
+        "color": "green"
+      }
+    },
+    {
+      "id": 3005,
+      "title": "Soccer practice",
+      "days_from_today": 1,
+      "at": "17:15",
+      "minutes": 90,
+      "location": "Riverside Fields",
+      "calendar": {
+        "id": 2005,
+        "name": "Family",
+        "color": "purple"
+      }
+    },
+    {
+      "id": 3006,
+      "title": "Dentist",
+      "days_from_today": 2,
+      "at": "08:00",
+      "minutes": 60,
+      "calendar": {
+        "id": 2003,
+        "name": "Personal",
+        "color": "blue"
+      }
+    },
+    {
+      "id": 3007,
+      "title": "Quarterly planning offsite",
+      "days_from_today": 3,
+      "days": 2,
+      "location": "Northstar Studio",
+      "calendar": {
+        "id": 2004,
+        "name": "Acme Design Co.",
+        "color": "green"
+      }
+    },
+    {
+      "id": 3008,
+      "title": "Rio's birthday",
+      "days_from_today": 5,
+      "days": 1,
+      "recurring": true,
+      "recurrence_schedule": {
+        "kind": "every_year",
+        "description": "every year",
+        "preset": true
+      },
+      "calendar": {
+        "id": 2005,
+        "name": "Family",
+        "color": "purple"
+      }
+    }
+  ],
+  "todos": [
+    {
+      "id": 4001,
+      "title": "Send the invoice",
+      "days_from_today": 0,
+      "days": 3,
+      "calendar": {
+        "id": 2001,
+        "personal": true
+      }
+    },
+    {
+      "id": 4002,
+      "title": "Book the venue",
+      "days_from_today": -1,
+      "days": 5,
+      "calendar": {
+        "id": 2001,
+        "personal": true
+      }
     }
   ]
 }

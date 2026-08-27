@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "37signals",
   "license": "MIT",
-  "description": "Unread email from HEY, live over HEY's cable, with new-mail notifications — through the HEY CLI.",
+  "description": "Unread email and your calendar from HEY, live over HEY's cable, with new-mail notifications \u2014 through the HEY CLI.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,18 +16,21 @@
   },
   "barWidget": {
     "displayName": "HEY",
-    "description": "Unread count and recent email from the HEY Imbox across linked accounts, updated as it changes.",
+    "description": "Unread count and recent email from the HEY Imbox, and a day view of your HEY calendar, updated as they change.",
     "category": "Communication",
     "aliases": [
       "hey",
       "email",
-      "mail"
+      "mail",
+      "calendar"
     ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
       "notify": false,
-      "openAction": "tui"
+      "openAction": "tui",
+      "unreadColor": "urgent",
+      "clock24Hour": false
     },
     "schema": [
       {
@@ -46,6 +49,19 @@
           "browser"
         ],
         "defaultValue": "tui"
+      },
+      {
+        "key": "unreadColor",
+        "type": "string",
+        "label": "Unread logo color",
+        "description": "urgent, accent, foreground, or a hex value like #8a63c4",
+        "defaultValue": "urgent"
+      },
+      {
+        "key": "clock24Hour",
+        "type": "boolean",
+        "label": "24-hour times on the calendar",
+        "defaultValue": false
       }
     ]
   }

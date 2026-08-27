@@ -72,6 +72,111 @@ def rendered_posting(source, seen, now):
     return posting
 
 
+def day_key(value):
+    return value.strftime("%Y-%m-%d")
+
+
+def utc_midnight(day):
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+
+
+def stamp(value):
+    return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+# Calendar fixtures are written relative to today — "in two days at 14:00" —
+# so the demo always has a day worth looking at, whenever it is run.
+def rendered_event(source, today):
+    event = deepcopy(source)
+    starts_in = int(event.pop("days_from_today", 0))
+    length = int(event.pop("minutes", 60))
+    day = today + timedelta(days=starts_in)
+    at = event.pop("at", None)
+
+    if at is None:
+        spans = int(event.pop("days", 1))
+        event["all_day"] = True
+        event["starts_at"] = stamp(utc_midnight(day))
+        event["ends_at"] = stamp(utc_midnight(day + timedelta(days=spans)))
+    else:
+        hour, minute = (int(part) for part in at.split(":"))
+        # Local wall-clock time, which is what a day view shows.
+        start = datetime(day.year, day.month, day.day, hour, minute).astimezone(timezone.utc)
+        event.pop("days", None)
+        event["all_day"] = False
+        event["starts_at"] = stamp(start)
+        event["ends_at"] = stamp(start + timedelta(minutes=length))
+
+    event.setdefault("recurring", False)
+    event["created_at"] = stamp(utc_midnight(today))
+    event["updated_at"] = event["created_at"]
+    event["edit_url"] = ""
+    return event
+
+
+def rendered_todo(source, today):
+    todo = deepcopy(source)
+    starts_in = int(todo.pop("days_from_today", 0))
+    spans = int(todo.pop("days", 1))
+    day = today + timedelta(days=starts_in)
+    todo["all_day"] = True
+    todo["starts_at"] = stamp(utc_midnight(day))
+    todo["ends_at"] = stamp(utc_midnight(day + timedelta(days=spans)))
+    todo["created_at"] = todo["starts_at"]
+    todo["updated_at"] = todo["starts_at"]
+    return todo
+
+
+def within_window(record, args):
+    starts_on = option(args, "--starts-on", "")
+    ends_on = option(args, "--ends-on", "")
+    if not starts_on or not ends_on:
+        return True
+    # A repeating event is answered whatever window is asked for, the way the
+    # real CLI answers one.
+    if record.get("recurring"):
+        return True
+    return record["starts_at"][:10] <= ends_on and record["ends_at"][:10] >= starts_on
+
+
+def list_events(fixture, args):
+    today = datetime.now().date()
+    events = [rendered_event(source, today) for source in fixture.get("events", [])]
+    print(json.dumps({"ok": True, "data": [item for item in events if within_window(item, args)]}))
+
+
+def list_todos(fixture, args):
+    today = datetime.now().date()
+    todos = [rendered_todo(source, today) for source in fixture.get("todos", [])]
+    completed = {str(value) for value in load_state().get("completed_todo_ids", [])}
+    for todo in todos:
+        if str(todo["id"]) in completed:
+            todo["completed_at"] = stamp(datetime.now(timezone.utc))
+    print(json.dumps({"ok": True, "data": [item for item in todos if within_window(item, args)]}))
+
+
+def list_calendars(fixture):
+    print(json.dumps({"ok": True, "data": fixture.get("calendars", [])}))
+
+
+def complete_todo(fixture, args):
+    todo_id = str(args[2])
+    if not any(str(item["id"]) == todo_id for item in fixture.get("todos", [])):
+        fail(f"Unknown demo todo: {todo_id}")
+    state = load_state()
+    completed = {str(value) for value in state.get("completed_todo_ids", [])}
+    completed.add(todo_id)
+    state["completed_todo_ids"] = sorted(completed)
+    save_state(state)
+    print(json.dumps({"ok": True, "data": {"id": todo_id, "completed": True}}))
+
+
+# The demo does not persist what it is asked to create; it answers the way the
+# CLI does so the panel's own re-read is exercised.
+def added(kind, args):
+    print(json.dumps({"ok": True, "data": {"id": 900001, "title": args[2]}, "summary": f"{kind} created"}))
+
+
 def auth_status():
     print(json.dumps({
         "ok": True,
@@ -194,6 +299,18 @@ def main():
         mark_seen(fixture, args)
     elif args == ["--account", "all", "watch", "--events", "added,updated,deleted,new,resync"]:
         watch()
+    elif args[:4] == ["event", "list", "--all", "--starts-on"] and args[-1] == "--json":
+        list_events(fixture, args)
+    elif args[:4] == ["todo", "list", "--all", "--starts-on"] and args[-1] == "--json":
+        list_todos(fixture, args)
+    elif args == ["calendar", "list", "--json"]:
+        list_calendars(fixture)
+    elif args[:2] == ["event", "add"] and "--json" in args:
+        added("Event", args)
+    elif args[:2] == ["todo", "add"] and "--json" in args:
+        added("Todo", args)
+    elif args[:2] == ["todo", "complete"] and args[-1] == "--json":
+        complete_todo(fixture, args)
     elif valid_tui_command(args):
         return
     else:

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "Calendar.js" as Calendar
 
 // The plugin's engine, instantiated once per shell as its `service` entry
 // point; every bar widget — one per monitor — reads this one instance, so one
@@ -783,4 +784,393 @@ Item {
       else if (!root.connected || exitCode !== 0) refreshAfterRead.restart()
     }
   }
+
+  // ------------------------------------------------------------------ calendar
+  //
+  // The calendar face reads a window of days around whatever day is being
+  // viewed, so stepping a day never waits on a process. Two reads make a
+  // window: events across every calendar, and todos from the personal one.
+  // They run in sequence and commit together, so a day is never half a day.
+  //
+  // Recurring events are expanded locally. `hey event list` answers a repeating
+  // event once, as its series, carrying the series' own start time whatever
+  // window is asked for — see Calendar.occurrencesOn.
+
+  property var calendars: []
+  property var calendarEvents: []
+  property var calendarTodos: []
+  property string calendarWindowStart: ""
+  property string calendarWindowEnd: ""
+  property bool calendarLoading: false
+  property bool calendarLoadPending: false
+  property string calendarError: ""
+  property date calendarUpdated: new Date(0)
+  property int calendarUnexpandable: 0
+
+  readonly property int calendarRefreshIntervalSec: 600
+  // The calendar reads over the same CLI the mail does, so it waits on the same
+  // three answers: installed, current, signed in.
+  readonly property bool calendarReady: probed && installed && !cliOutdated && authenticated
+  readonly property bool calendarBusy: calendarEventsProcess.running || calendarTodosProcess.running
+  // Events and todos are read separately and shown as one day.
+  readonly property var calendarRecords: calendarEvents.concat(calendarTodos)
+
+  // A read killed mid-flight — a shell restart, a process reaped — exits
+  // non-zero with nothing on either stream. There is nothing to tell the user
+  // about that, so it is retried once before it becomes an error line.
+  property bool _calendarRetried: false
+  property string _calendarPendingStart: ""
+  property string _calendarPendingEnd: ""
+  property var _calendarPendingEvents: []
+  property string _calendarEventsOutput: ""
+  property string _calendarEventsError: ""
+  property string _calendarTodosOutput: ""
+  property string _calendarTodosError: ""
+  property string _calendarsOutput: ""
+  property string _calendarWriteOutput: ""
+  property string _calendarWriteError: ""
+  // The machine's IANA zone, read once. A clock time the CLI is given without
+  // one is read as UTC, so this is what keeps an afternoon meeting in the
+  // afternoon.
+  property string timeZone: ""
+  property var _calendarWriteQueue: []
+  property var _calendarWriting: null
+
+  function calendarCovers(key) {
+    return Calendar.windowCovers({ start: calendarWindowStart, end: calendarWindowEnd }, key)
+  }
+
+  // Called on every day change: a day already inside the loaded window costs
+  // nothing, and one near the edge quietly reads again around itself.
+  function ensureCalendarDay(key) {
+    if (!Calendar.isDayKey(key)) return
+    if (calendarCovers(key) && calendarUpdated.getTime() > 0) return
+    loadCalendar(key)
+  }
+
+  function calendarCenterKey() {
+    return Calendar.isDayKey(calendarWindowStart)
+      ? Calendar.addDays(calendarWindowStart, Calendar.windowBackDays)
+      : Calendar.todayKey()
+  }
+
+  function refreshCalendar() {
+    loadCalendar(calendarCenterKey())
+  }
+
+  function refreshCalendarIfStale() {
+    var updatedAt = calendarUpdated instanceof Date ? calendarUpdated.getTime() : 0
+    if (updatedAt <= 0 || Date.now() - updatedAt >= calendarRefreshIntervalSec * 1000) refreshCalendar()
+  }
+
+  function loadCalendar(centerKey) {
+    if (!active || !calendarReady) return
+    var window = Calendar.windowFor(Calendar.isDayKey(centerKey) ? centerKey : Calendar.todayKey())
+    _calendarPendingStart = window.start
+    _calendarPendingEnd = window.end
+    if (calendarBusy) {
+      calendarLoadPending = true
+      return
+    }
+    calendarLoading = true
+    // The error is not cleared here: a write that failed reports through the
+    // same line, and the re-read it triggers would wipe the message before it
+    // could be read. A successful read clears it instead.
+    _calendarEventsOutput = ""
+    _calendarEventsError = ""
+    calendarEventsProcess.command = Model.boundedCaptureCommand(
+      Calendar.eventsListArgs(_calendarPendingStart, _calendarPendingEnd),
+      Model.cliResponseByteLimit, Model.cliErrorByteLimit)
+    calendarEventsProcess.running = true
+  }
+
+  // A failed read leaves the last good window in place: a day that was right a
+  // minute ago beats a day wiped blank by a hiccup.
+  function failCalendar(stdout, stderr, fallback) {
+    var failure = Model.parseFailure(stdout, stderr)
+    calendarLoading = false
+    if (Model.isAuthError(failure.code)) {
+      signedOut()
+      return
+    }
+    // A failure that says nothing is one the user cannot act on. Read again
+    // once before putting a message over a window that may still be good.
+    if (String(stdout || "").trim() === "" && String(stderr || "").trim() === "" && !_calendarRetried) {
+      _calendarRetried = true
+      calendarRetry.restart()
+      return
+    }
+    calendarError = conciseError(failure.error || stderr || stdout, fallback)
+    runPendingCalendarLoad()
+  }
+
+  function finishCalendarEvents(exitCode, stdout, stderr) {
+    if (exitCode !== 0) {
+      failCalendar(stdout, stderr, "Could not read the HEY calendar")
+      return
+    }
+    var result = Model.parseJson(stdout)
+    if (!result.ok) {
+      failCalendar(stdout, stderr, "Could not read the HEY calendar")
+      return
+    }
+    _calendarPendingEvents = Calendar.readEvents(result.value.data)
+    _calendarTodosOutput = ""
+    _calendarTodosError = ""
+    calendarTodosProcess.command = Model.boundedCaptureCommand(
+      Calendar.todosListArgs(_calendarPendingStart, _calendarPendingEnd),
+      Model.cliResponseByteLimit, Model.cliErrorByteLimit)
+    calendarTodosProcess.running = true
+  }
+
+  function finishCalendarTodos(exitCode, stdout, stderr) {
+    if (exitCode !== 0) {
+      failCalendar(stdout, stderr, "Could not read your HEY todos")
+      return
+    }
+    var result = Model.parseJson(stdout)
+    if (!result.ok) {
+      failCalendar(stdout, stderr, "Could not read your HEY todos")
+      return
+    }
+    calendarEvents = _calendarPendingEvents
+    calendarTodos = Calendar.readTodos(result.value.data)
+    calendarUnexpandable = Calendar.unexpandableCount(calendarEvents)
+    calendarWindowStart = _calendarPendingStart
+    calendarWindowEnd = _calendarPendingEnd
+    calendarError = ""
+    calendarLoading = false
+    calendarUpdated = new Date()
+    _calendarRetried = false
+    runPendingCalendarLoad()
+  }
+
+  function runPendingCalendarLoad() {
+    if (!calendarLoadPending) return
+    calendarLoadPending = false
+    calendarLoadSoon.restart()
+  }
+
+  // The calendar picker is only needed by the event form, so it is read the
+  // first time the form is opened rather than on every refresh.
+  function ensureTimeZone() {
+    if (timeZone !== "" || timeZoneProcess.running) return
+    timeZoneProcess.running = true
+  }
+
+  function ensureCalendars() {
+    if (calendars.length > 0 || calendarsProcess.running || !calendarReady) return
+    _calendarsOutput = ""
+    calendarsProcess.running = true
+  }
+
+  // --------------------------------------------------------------- writing
+  //
+  // Writes queue behind one process so two quick adds cannot interleave, and
+  // each reports through the same status line the mail face uses.
+
+  function addEvent(form) {
+    var title = Model.boundedString(form && form.title, Model.remoteNameCharacterLimit).trim()
+    if (title === "") return false
+    var fields = {
+      title: title,
+      dayKey: form.dayKey,
+      startTime: Calendar.normalizeClockTime(form.startTime),
+      endTime: Calendar.normalizeClockTime(form.endTime),
+      calendarId: form.calendarId,
+      location: Model.boundedString(form.location, Model.remoteNameCharacterLimit).trim(),
+      timeZone: timeZone
+    }
+    queueCalendarWrite(Calendar.eventAddArgs(fields), "Adding the event…", "Could not add the event")
+    return true
+  }
+
+  function addTodo(title, dayKey) {
+    var text = Model.boundedString(title, Model.remoteNameCharacterLimit).trim()
+    if (text === "") return false
+    queueCalendarWrite(Calendar.todoAddArgs(text, dayKey), "Adding the todo…", "Could not add the todo")
+    return true
+  }
+
+  // The completed todo leaves the day at once and the window is read again
+  // behind it; a write that fails puts it back, because the re-read is what
+  // decides what the day holds.
+  function completeTodo(id) {
+    var todoId = String(id || "")
+    if (todoId === "") return false
+    var remaining = []
+    for (var i = 0; i < calendarTodos.length; i++) {
+      if (String(calendarTodos[i].id) !== todoId) remaining.push(calendarTodos[i])
+    }
+    calendarTodos = remaining
+    queueCalendarWrite(Calendar.todoCompleteArgs(todoId), "Completing the todo…", "Could not complete the todo")
+    return true
+  }
+
+  function queueCalendarWrite(args, runningStatus, failureMessage) {
+    var queue = _calendarWriteQueue.slice()
+    queue.push({ args: args, status: runningStatus, failure: failureMessage })
+    _calendarWriteQueue = queue
+    runNextCalendarWrite()
+  }
+
+  function runNextCalendarWrite() {
+    if (calendarWriteProcess.running || _calendarWriteQueue.length === 0) return
+    var queue = _calendarWriteQueue.slice()
+    _calendarWriting = queue.shift()
+    _calendarWriteQueue = queue
+    _calendarWriteOutput = ""
+    _calendarWriteError = ""
+    actionStatusTimer.stop()
+    actionStatus = _calendarWriting.status
+    calendarWriteProcess.command = Model.boundedCaptureCommand(
+      _calendarWriting.args, Model.cliResponseByteLimit, Model.cliErrorByteLimit)
+    calendarWriteProcess.running = true
+  }
+
+  function finishCalendarWrite(exitCode, stdout, stderr) {
+    var request = _calendarWriting
+    _calendarWriting = null
+    if (exitCode !== 0 || !Model.parseJson(stdout).ok) {
+      var failure = Model.parseFailure(stdout, stderr)
+      if (Model.isAuthError(failure.code)) signedOut()
+      else calendarError = conciseError(failure.error || stderr || stdout, request ? request.failure : "The HEY request failed")
+      actionStatus = ""
+    } else {
+      actionStatus = ""
+      calendarError = ""
+    }
+    if (_calendarWriteQueue.length > 0) {
+      runNextCalendarWrite()
+      return
+    }
+    // Read the window back rather than guessing what the write produced: HEY
+    // decides the id, the span a dateless todo covers, and how a repeat lands.
+    refreshCalendar()
+  }
+
+  // The bar's tooltip names the next event whether or not the panel has ever
+  // been opened, so the first window is read as soon as the CLI is ready.
+  onCalendarReadyChanged: {
+    if (!calendarReady) return
+    ensureTimeZone()
+    if (calendarUpdated.getTime() <= 0) refreshCalendar()
+  }
+
+  Process {
+    id: timeZoneProcess
+    running: false
+    command: Calendar.timeZoneCommand
+    stdout: StdioCollector {
+      id: timeZoneStdout
+      waitForEnd: true
+      onStreamFinished: root.timeZone = Calendar.readTimeZone(text)
+    }
+  }
+
+  Timer {
+    id: calendarRetry
+    interval: 1500
+    repeat: false
+    onTriggered: root.loadCalendar(root.calendarCenterKey())
+  }
+
+  Timer {
+    id: calendarLoadSoon
+    interval: 60
+    repeat: false
+    onTriggered: root.loadCalendar(Calendar.addDays(root._calendarPendingStart, Calendar.windowBackDays))
+  }
+
+  Timer {
+    id: calendarRefreshTimer
+    interval: root.calendarRefreshIntervalSec * 1000
+    repeat: true
+    running: root.active && root.calendarReady && root.calendarUpdated.getTime() > 0
+    onTriggered: root.refreshCalendar()
+  }
+
+  Process {
+    id: calendarEventsProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: calendarEventsStdout
+      waitForEnd: true
+      onStreamFinished: root._calendarEventsOutput = text
+    }
+    stderr: StdioCollector {
+      id: calendarEventsStderr
+      waitForEnd: true
+      onStreamFinished: root._calendarEventsError = text
+    }
+    onExited: function(exitCode) {
+      root.finishCalendarEvents(
+        exitCode,
+        String(calendarEventsStdout.text || root._calendarEventsOutput || ""),
+        String(calendarEventsStderr.text || root._calendarEventsError || ""))
+    }
+  }
+
+  Process {
+    id: calendarTodosProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: calendarTodosStdout
+      waitForEnd: true
+      onStreamFinished: root._calendarTodosOutput = text
+    }
+    stderr: StdioCollector {
+      id: calendarTodosStderr
+      waitForEnd: true
+      onStreamFinished: root._calendarTodosError = text
+    }
+    onExited: function(exitCode) {
+      root.finishCalendarTodos(
+        exitCode,
+        String(calendarTodosStdout.text || root._calendarTodosOutput || ""),
+        String(calendarTodosStderr.text || root._calendarTodosError || ""))
+    }
+  }
+
+  Process {
+    id: calendarsProcess
+    running: false
+    command: Model.boundedCaptureCommand(
+      ["hey", "calendar", "list", "--json"], Model.cliResponseByteLimit, Model.cliErrorByteLimit)
+    stdout: StdioCollector {
+      id: calendarsStdout
+      waitForEnd: true
+      onStreamFinished: root._calendarsOutput = text
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      var result = Model.parseJson(String(calendarsStdout.text || root._calendarsOutput || ""))
+      if (result.ok) root.calendars = Calendar.writableCalendars(result.value.data)
+    }
+  }
+
+  Process {
+    id: calendarWriteProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: calendarWriteStdout
+      waitForEnd: true
+      onStreamFinished: root._calendarWriteOutput = text
+    }
+    stderr: StdioCollector {
+      id: calendarWriteStderr
+      waitForEnd: true
+      onStreamFinished: root._calendarWriteError = text
+    }
+    onExited: function(exitCode) {
+      root.finishCalendarWrite(
+        exitCode,
+        String(calendarWriteStdout.text || root._calendarWriteOutput || ""),
+        String(calendarWriteStderr.text || root._calendarWriteError || ""))
+    }
+  }
+
 }
