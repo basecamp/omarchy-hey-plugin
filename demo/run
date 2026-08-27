@@ -21,10 +21,11 @@ workspace_changed=0
 cleanup_done=0
 capture=0
 output=""
+face="mail"
 
 usage() {
   cat <<'USAGE'
-Usage: ./demo/run [--screenshot] [--output PATH]
+Usage: ./demo/run [--screenshot] [--output PATH] [--face mail|calendar]
 
 Runs the installed HEY plugin against fictional CLI data on an empty
 workspace. The normal shell, plugin checkout, workspace, and shell configuration
@@ -33,6 +34,7 @@ are restored when the command exits.
 Options:
   --screenshot       Capture the top bar and open HEY panel, then exit.
   --output PATH      Screenshot destination. Implies --screenshot.
+  --face NAME        Which face to show: mail (default) or calendar.
   -h, --help         Show this help.
 USAGE
 }
@@ -40,6 +42,12 @@ USAGE
 while (( $# > 0 )); do
   case $1 in
     --screenshot) capture=1 ;;
+    --face)
+      shift
+      (( $# > 0 )) || { echo "--face requires mail or calendar" >&2; exit 2; }
+      face=$1
+      ;;
+    --face=*) face=${1#--face=} ;;
     --output)
       shift
       (( $# > 0 )) || { echo "--output requires a path" >&2; exit 2; }
@@ -337,8 +345,19 @@ fi
 omarchy-shell notifications dismissAll >/dev/null 2>&1 || true
 omarchy-shell osd close >/dev/null 2>&1 || true
 hyprctl dismissnotify >/dev/null 2>&1 || true
+case $face in
+  mail|calendar) ;;
+  *) echo "Unknown face: $face (expected mail or calendar)" >&2; exit 2 ;;
+esac
+
 omarchy-shell 37signals.hey open >/dev/null
 sleep 1
+
+if [[ $face == calendar ]]; then
+  omarchy-shell 37signals.hey calendar >/dev/null
+  # The flip animates; let it land before anything is captured.
+  sleep 1.5
+fi
 
 monitor_x=$(jq -r '.x' <<<"$monitor")
 monitor_y=$(jq -r '.y' <<<"$monitor")

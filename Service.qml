@@ -815,6 +815,10 @@ Item {
   // Events and todos are read separately and shown as one day.
   readonly property var calendarRecords: calendarEvents.concat(calendarTodos)
 
+  // A read killed mid-flight — a shell restart, a process reaped — exits
+  // non-zero with nothing on either stream. There is nothing to tell the user
+  // about that, so it is retried once before it becomes an error line.
+  property bool _calendarRetried: false
   property string _calendarPendingStart: ""
   property string _calendarPendingEnd: ""
   property var _calendarPendingEvents: []
@@ -889,6 +893,13 @@ Item {
       signedOut()
       return
     }
+    // A failure that says nothing is one the user cannot act on. Read again
+    // once before putting a message over a window that may still be good.
+    if (String(stdout || "").trim() === "" && String(stderr || "").trim() === "" && !_calendarRetried) {
+      _calendarRetried = true
+      calendarRetry.restart()
+      return
+    }
     calendarError = conciseError(failure.error || stderr || stdout, fallback)
     runPendingCalendarLoad()
   }
@@ -930,6 +941,7 @@ Item {
     calendarError = ""
     calendarLoading = false
     calendarUpdated = new Date()
+    _calendarRetried = false
     runPendingCalendarLoad()
   }
 
@@ -1054,6 +1066,13 @@ Item {
       waitForEnd: true
       onStreamFinished: root.timeZone = Calendar.readTimeZone(text)
     }
+  }
+
+  Timer {
+    id: calendarRetry
+    interval: 1500
+    repeat: false
+    onTriggered: root.loadCalendar(root.calendarCenterKey())
   }
 
   Timer {

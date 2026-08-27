@@ -144,6 +144,34 @@ TestCase {
     verify(service.calendarError !== "")
   }
 
+  // A read killed mid-flight exits non-zero with nothing on either stream.
+  // There is nothing to tell the user about that.
+  function test_a_failure_that_says_nothing_is_read_again_before_it_is_reported() {
+    loadWindow([timedEvent(1, "2026-08-27T17:00:00Z", "2026-08-27T18:00:00Z", "Design review")], [])
+
+    service.refreshCalendar()
+    findHeyProcess("event", "list").complete(1, "", "")
+
+    compare(service.calendarError, "")
+    compare(service.calendarRecords.length, 1)
+
+    // The retry lands, and only a second silent failure becomes a message.
+    wait(1600)
+    var retry = findHeyProcess("event", "list")
+    verify(retry !== null)
+    retry.complete(1, "", "")
+    verify(service.calendarError !== "")
+  }
+
+  function test_a_failure_that_says_something_is_reported_at_once() {
+    loadWindow([], [])
+
+    service.refreshCalendar()
+    findHeyProcess("event", "list").complete(1, "", '{"ok":false,"error":"HEY is unreachable","code":"network"}')
+
+    verify(service.calendarError !== "")
+  }
+
   function test_a_failed_todo_read_leaves_the_events_uncommitted() {
     signIn()
     findHeyProcess("event", "list").complete(0, eventsPayload([
