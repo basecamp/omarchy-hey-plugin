@@ -2,6 +2,7 @@
 // THIRD_PARTY_NOTICES.md.
 import QtQuick
 import QtQuick.Controls
+import Quickshell
 import qs.Commons
 import qs.Ui
 
@@ -33,14 +34,43 @@ Item {
   // its cursor state in sync with the mouse.
   property bool hasCursor: false
 
+  // A vertical bar pins the panel card near the bottom of the screen, where
+  // a popup that only opens downward runs past the monitor edge and gets
+  // clipped. Compute the trigger's bottom edge inside its window (the panel
+  // is a full-bleed layer-shell, so window coordinates are screen
+  // coordinates) and flip the popup above the trigger when there isn't room
+  // below. Popup x/y are trigger-relative, so a negative y lands just above
+  // the trigger.
+  property bool openUpward: false
+
+  // Geometry overrides let the component exercise its real popup placement in
+  // a controlled QML test window. Normal panel instances use QsWindow below.
+  property var _placementWindow: null
+  property Item _placementContentItem: null
+  readonly property real _popupY: popup.y
+  readonly property real _popupHeight: popup.implicitHeight
+
+  function computePlacement() {
+    var hostWindow = _placementWindow
+    var windowContent = _placementContentItem
+    if (!hostWindow || !windowContent) {
+      hostWindow = trigger ? trigger.QsWindow.window : null
+      windowContent = trigger ? trigger.QsWindow.contentItem : null
+    }
+    if (!hostWindow || !windowContent) return
+    var gap = Style.spacing.xxs
+    var bottom = trigger.mapToItem(windowContent, 0, trigger.height + gap).y
+    openUpward = (bottom + popup.implicitHeight) > (hostWindow.height - gap)
+  }
+
   // popupOpen + open()/close()/toggle() let a parent panel know when the
   // dropdown owns keys (its embedded ListView is active) and suspend its
   // own keyCatcher so j/k inside the popup don't double-drive the panel
   // cursor.
   readonly property bool popupOpen: popup.opened
-  function open() { popup.open() }
+  function open() { computePlacement(); popup.open() }
   function close() { popup.close() }
-  function toggle() { popup.opened ? popup.close() : popup.open() }
+  function toggle() { computePlacement(); popup.opened ? popup.close() : popup.open() }
 
   signal changed(string value)
   signal hovered(bool isHovered)
@@ -98,7 +128,7 @@ Item {
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
             || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
-          popup.opened ? popup.close() : popup.open()
+          popup.opened ? popup.close() : root.open()
           event.accepted = true
         } else if (event.key === Qt.Key_Escape && popup.opened) {
           popup.close(); event.accepted = true
@@ -136,14 +166,14 @@ Item {
         cursorShape: Qt.PointingHandCursor
         onClicked: {
           trigger.forceActiveFocus()
-          popup.opened ? popup.close() : popup.open()
+          popup.opened ? popup.close() : root.open()
         }
       }
 
       Popup {
         id: popup
         x: 0
-        y: trigger.height + Style.spacing.xxs
+        y: root.openUpward ? -(popup.implicitHeight + Style.spacing.xxs) : trigger.height + Style.spacing.xxs
         width: trigger.width
         implicitHeight: Math.min(root.options.length * root.popupRowHeight + Math.max(0, root.options.length - 1) * Style.spacing.labelGap + Style.spacing.xxs,
                                  root.popupRowHeight * 8 + 7 * Style.spacing.labelGap + Style.spacing.xxs)
@@ -160,7 +190,9 @@ Item {
           radius: Style.cornerRadius
         }
 
-        onOpened: {
+        onOpenedChanged: {
+          if (!opened) return
+          root.computePlacement()
           optionList.currentIndex = Math.max(0, optionList.indexOfValue(root.value))
           optionList.forceActiveFocus()
         }

@@ -476,7 +476,7 @@ Panel {
       anchors.fill: parent
       // Settings controls own their native focus chain and keys. The page-level
       // Escape handler below returns to email after an open dropdown closes.
-      blocked: root.settingsOpen || accountDropdown.popupOpen
+      blocked: root.settingsOpen || accountDropdown.popupOpen || openActionDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
         if (root.settingsOpen) return
         if (dx !== 0) root.cycleAccountFilter(dx)
@@ -1036,7 +1036,7 @@ Panel {
                 font.bold: true
               }
 
-              Dropdown {
+              PlainTextDropdown {
                 id: openActionDropdown
                 width: parent.width
                 showLabel: false
