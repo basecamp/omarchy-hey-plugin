@@ -500,6 +500,35 @@ TestCase {
       ["omarchy-launch-webapp", "https://app.hey.com/topics/5511"])
   }
 
+  function test_screener_click_opens_the_named_tui_at_the_screener() {
+    service.settings = { openAction: "tui" }
+    service.openScreener()
+
+    compare(Quickshell.detachedCommands.length, 2)
+    compare(Quickshell.detachedCommands[0],
+      ["hey", "tui", "--instance", "omarchy", "--screener", "--remote"])
+    compare(Quickshell.detachedCommands[1],
+      ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey", "tui", "--instance", "omarchy", "--screener"])
+  }
+
+  function test_screener_click_opens_the_hey_app_when_configured() {
+    service.settings = { openAction: "app" }
+    service.openScreener()
+
+    compare(Quickshell.detachedCommands.length, 1)
+    compare(Quickshell.detachedCommands[0],
+      ["omarchy-launch-webapp", "https://app.hey.com/clearances"])
+  }
+
+  function test_screener_click_opens_the_browser_when_configured() {
+    service.settings = { openAction: "browser" }
+    service.openScreener()
+
+    compare(Quickshell.detachedCommands.length, 1)
+    compare(Quickshell.detachedCommands[0],
+      ["xdg-open", "https://app.hey.com/clearances"])
+  }
+
   function test_tui_notification_click_opens_the_message_topic() {
     service.settings = { notify: true, openAction: "tui" }
     service.toastDebounceMs = 0

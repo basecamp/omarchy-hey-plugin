@@ -493,7 +493,7 @@ Panel {
         if (text === "r" || text === "R") service.refresh()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
-        else if (text === "s" || text === "S") Qt.openUrlExternally("https://app.hey.com/clearances")
+        else if (text === "s" || text === "S") service.openScreener()
         else if (text === "n" || text === "N") root.toggleNotify()
       }
 
@@ -668,7 +668,7 @@ Panel {
               fontSize: Style.font.caption
               horizontalPadding: Style.space(7)
               verticalPadding: Style.space(1)
-              onClicked: Qt.openUrlExternally("https://app.hey.com/clearances")
+              onClicked: service.openScreener()
             }
           }
         }

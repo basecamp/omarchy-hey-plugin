@@ -146,6 +146,7 @@ def valid_tui_command(args):
 
     values = {}
     remote = False
+    screener = False
     index = tui_index + 1
     while index < len(args):
         flag = args[index]
@@ -153,6 +154,12 @@ def valid_tui_command(args):
             if remote:
                 return False
             remote = True
+            index += 1
+            continue
+        if flag == "--screener":
+            if screener:
+                return False
+            screener = True
             index += 1
             continue
         if flag not in ("--instance", "--topic", "--topic-title") or flag in values or index + 1 >= len(args):
@@ -165,7 +172,11 @@ def valid_tui_command(args):
     topic = values.get("--topic", "")
     if topic and (not topic.isdigit() or int(topic) <= 0):
         return False
-    if (remote or "--topic-title" in values) and not topic:
+    if topic and screener:
+        return False
+    if "--topic-title" in values and not topic:
+        return False
+    if remote and not (topic or screener):
         return False
     return True
 

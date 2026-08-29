@@ -391,6 +391,14 @@ test("TUI clicks dispatch a topic before focusing or launching the TUI", () => {
   assert.equal(Model.tuiOpenCommand(0, 0), Model.toastFocusCommand)
 })
 
+test("Screener clicks open the named TUI at The Screener", () => {
+  assert.equal(Model.heyScreenerUrl, "https://app.hey.com/clearances")
+  assert.deepEqual(Model.tuiScreenerRemoteCommand(),
+    ["hey", "tui", "--instance", "omarchy", "--screener", "--remote"])
+  assert.deepEqual(Model.tuiScreenerFocusCommand(),
+    ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey", "tui", "--instance", "omarchy", "--screener"])
+})
+
 test("toastCommand deep-links a single message into the TUI", () => {
   const command = Model.toastCommand("HEY\nLunch on Thursday?", "Are you free?", 0,
     "tui", "https://app.hey.com/topics/5511", 5511, 42, "Lunch on Thursday?")
