@@ -2,6 +2,7 @@
 // THIRD_PARTY_NOTICES.md.
 import QtQuick
 import QtQuick.Controls
+import Quickshell
 import qs.Commons
 import qs.Ui
 
@@ -42,11 +43,24 @@ Item {
   // the trigger.
   property bool openUpward: false
 
+  // Geometry overrides let the component exercise its real popup placement in
+  // a controlled QML test window. Normal panel instances use QsWindow below.
+  property var _placementWindow: null
+  property Item _placementContentItem: null
+  readonly property real _popupY: popup.y
+  readonly property real _popupHeight: popup.implicitHeight
+
   function computePlacement() {
-    if (!trigger || !trigger.window || !trigger.window.contentItem) return
+    var hostWindow = _placementWindow
+    var windowContent = _placementContentItem
+    if (!hostWindow || !windowContent) {
+      hostWindow = trigger ? trigger.QsWindow.window : null
+      windowContent = trigger ? trigger.QsWindow.contentItem : null
+    }
+    if (!hostWindow || !windowContent) return
     var gap = Style.spacing.xxs
-    var bottom = trigger.mapToItem(trigger.window.contentItem, 0, trigger.height + gap).y
-    openUpward = (bottom + popup.implicitHeight) > (trigger.window.height - gap)
+    var bottom = trigger.mapToItem(windowContent, 0, trigger.height + gap).y
+    openUpward = (bottom + popup.implicitHeight) > (hostWindow.height - gap)
   }
 
   // popupOpen + open()/close()/toggle() let a parent panel know when the

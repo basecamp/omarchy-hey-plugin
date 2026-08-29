@@ -32,7 +32,10 @@ test("settings email action uses the plain-text dropdown", () => {
 })
 
 test("plain-text dropdown flips upward near the bottom of the screen", () => {
+  assert.match(dropdown, /import Quickshell/)
   assert.match(dropdown, /property bool openUpward/)
   assert.match(dropdown, /function computePlacement/)
-  assert.match(dropdown, /trigger\.mapToItem\(trigger\.window\.contentItem/)
+  assert.match(dropdown, /trigger\.QsWindow\.window/)
+  assert.match(dropdown, /trigger\.QsWindow\.contentItem/)
+  assert.match(dropdown, /trigger\.mapToItem\(windowContent/)
 })
