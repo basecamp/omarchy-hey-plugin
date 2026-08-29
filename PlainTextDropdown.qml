@@ -190,7 +190,8 @@ Item {
           radius: Style.cornerRadius
         }
 
-        onOpened: {
+        onOpenedChanged: {
+          if (!opened) return
           root.computePlacement()
           optionList.currentIndex = Math.max(0, optionList.indexOfValue(root.value))
           optionList.forceActiveFocus()
