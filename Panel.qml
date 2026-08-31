@@ -16,7 +16,7 @@ Panel {
   property int selectedIndex: 0
   property bool cursorActive: false
   property double nowMs: Date.now()
-  property string accountFilter: ""
+  readonly property string accountFilter: service.accountFilter
   property string stateFilter: "unread"
   property bool settingsOpen: false
   property bool pendingSettingsOpen: false
@@ -88,14 +88,6 @@ Panel {
   onServiceChanged: pushSettings()
   Component.onCompleted: pushSettings()
 
-  function ensureAccountFilter() {
-    if (accountFilter === "") return
-    for (var i = 0; i < service.accounts.length; i++) {
-      if (String(service.accounts[i].id) === accountFilter) return
-    }
-    setAccountFilter("")
-  }
-
   function resetFilteredView() {
     selectedIndex = 0
     cursorActive = false
@@ -107,7 +99,7 @@ Panel {
   }
 
   function setAccountFilter(value) {
-    accountFilter = String(value || "")
+    service.setAccountFilter(value)
     resetFilteredView()
   }
 
@@ -193,12 +185,7 @@ Panel {
   function accountUnreadCount(accountId) {
     var id = String(accountId || "")
     if (id === "") return 0
-    var count = 0
-    for (var i = 0; i < service.notifications.length; i++) {
-      var item = service.notifications[i]
-      if (item.unread === true && String(item.accountId || "") === id) count++
-    }
-    return count
+    return Model.unreadCount(service.notifications, id)
   }
 
   function cycleAccountFilter(delta) {
@@ -329,7 +316,7 @@ Panel {
 
   Connections {
     target: root.service
-    function onAccountsChanged() { root.ensureAccountFilter() }
+    function onAccountFilterChanged() { root.resetFilteredView() }
   }
 
   Timer {

@@ -5,6 +5,15 @@ const path = require("node:path")
 
 const panel = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
 
+test("account selection is shared through the service", () => {
+  assert.match(panel, /readonly property string accountFilter:\s*service\.accountFilter/)
+  assert.match(panel, /function setAccountFilter\(value\)\s*{\s*service\.setAccountFilter\(value\)/)
+})
+
+test("shared account changes reset each panel's filtered view", () => {
+  assert.match(panel, /Connections\s*{\s*target:\s*root\.service\s*function onAccountFilterChanged\(\)\s*{\s*root\.resetFilteredView\(\)/)
+})
+
 test("bar tooltip stays hidden while HEY setup is needed", () => {
   assert.match(panel, /tooltipText:\s*root\.needsSetup\s*\?\s*""\s*:\s*service\.refreshing/)
 })

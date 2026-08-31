@@ -136,7 +136,6 @@ TestCase {
 
   function test_missing_cli_clears_stale_mail_state() {
     service.notifications = [{ id: "old", unread: true }]
-    service.unreadCount = 1
     service.screenerCount = 4
 
     probeProcess().complete(0, "missing\n", "")
@@ -151,7 +150,6 @@ TestCase {
 
   function test_signed_out_probe_clears_stale_mail_state() {
     service.notifications = [{ id: "old", unread: true }]
-    service.unreadCount = 1
     service.screenerCount = 2
 
     probeProcess().complete(0, '{"ok":true,"data":{"authenticated":false}}', "")
@@ -267,7 +265,6 @@ TestCase {
     service.accounts = [{ id: "account-1", name: "Personal", order: 0 }]
     var item = { id: "1", accountId: "account-1", unread: true }
     service.notifications = [item]
-    service.unreadCount = 1
 
     service.markRead(item)
 
@@ -279,7 +276,6 @@ TestCase {
     var first = { id: "1", unread: true }
     var second = { id: "2", unread: true }
     service.notifications = [first, second]
-    service.unreadCount = 2
 
     service.markRead(first)
     compare(service.unreadCount, 1)

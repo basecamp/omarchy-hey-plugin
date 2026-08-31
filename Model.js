@@ -666,6 +666,19 @@ function filterNotifications(items, accountId, state) {
   })
 }
 
+function unreadCount(items, accountId) {
+  var source = Array.isArray(items) ? items : []
+  var selectedAccount = boundedString(accountId || "", remoteIdCharacterLimit)
+  var count = 0
+  for (var i = 0; i < source.length; i++) {
+    var item = source[i] || {}
+    if (selectedAccount !== ""
+        && boundedString(item.accountId || "", remoteIdCharacterLimit) !== selectedAccount) continue
+    if (item.unread === true) count++
+  }
+  return count
+}
+
 function accountFilterOptions(accounts) {
   var options = [{ value: "", label: "All accounts" }]
   var source = Array.isArray(accounts) ? accounts.slice(0, maximumAccountCount) : []
@@ -866,6 +879,7 @@ if (typeof module !== "undefined") {
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,
     filterNotifications: filterNotifications,
+    unreadCount: unreadCount,
     accountFilterOptions: accountFilterOptions,
     notificationBadgeText: notificationBadgeText,
     computeInitials: computeInitials,

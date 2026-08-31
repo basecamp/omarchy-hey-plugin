@@ -35,7 +35,7 @@ Item {
   property bool probeError: false
   property var accounts: []
   property var notifications: []
-  property int unreadCount: 0
+  readonly property int unreadCount: Model.unreadCount(notifications, accountFilter)
   property int screenerCount: 0
   property date lastUpdated: new Date(0)
   property string lastError: ""
@@ -50,6 +50,7 @@ Item {
   readonly property bool notify: setting("notify", false) === true
   readonly property string openAction: openActionSetting()
   readonly property int accountCount: accounts.length
+  property string accountFilter: ""
   // Every process a refresh drives; a pending refresh waits for all of them.
   readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
 
@@ -129,6 +130,20 @@ Item {
     return toast === email && choices.indexOf(toast) !== -1 ? toast : "tui"
   }
 
+  function setAccountFilter(value) {
+    accountFilter = String(value || "")
+  }
+
+  function ensureAccountFilter() {
+    if (accountFilter === "") return
+    for (var i = 0; i < accounts.length; i++) {
+      if (String(accounts[i].id) === accountFilter) return
+    }
+    setAccountFilter("")
+  }
+
+  onAccountsChanged: ensureAccountFilter()
+
   function conciseError(value, fallback) {
     var source = Model.boundedString(value || fallback || "HEY request failed", Model.remoteErrorCharacterLimit)
     var text = source.replace(/\s+/g, " ").trim()
@@ -179,7 +194,6 @@ Item {
       installed = false
       authenticated = true
       notifications = []
-      unreadCount = 0
       screenerCount = 0
       refreshing = false
       stopWatch()
@@ -247,7 +261,6 @@ Item {
   function signedOut() {
     authenticated = false
     notifications = []
-    unreadCount = 0
     screenerCount = 0
     refreshing = false
     stopWatch()
@@ -410,9 +423,6 @@ Item {
 
   function finishRefresh(items) {
     notifications = Model.sortNotifications(items)
-    var unread = 0
-    for (var i = 0; i < notifications.length; i++) if (notifications[i].unread) unread += 1
-    unreadCount = unread
     refreshing = false
     lastUpdated = new Date()
   }
@@ -463,7 +473,6 @@ Item {
 
   function setReadOptimistically(item) {
     var changed = []
-    var marked = false
     for (var i = 0; i < notifications.length; i++) {
       var existing = notifications[i]
       if (String(existing.id) === String(item.id) && existing.unread) {
@@ -471,13 +480,11 @@ Item {
         for (var key in existing) replacement[key] = existing[key]
         replacement.unread = false
         changed.push(replacement)
-        marked = true
       } else {
         changed.push(existing)
       }
     }
     notifications = changed
-    if (marked) unreadCount = Math.max(0, unreadCount - 1)
   }
 
   function runNextRead() {
