@@ -7,7 +7,8 @@ import qs.Commons
 import qs.Ui
 
 // Themed single-select dropdown with plain-text labels and Omarchy panel
-// colors. `options` accepts strings or { value, label } objects.
+// colors. `options` accepts strings or { value, label, badge } objects; a
+// non-empty badge renders as a trailing count bubble in the trigger and list.
 //
 // Keyboard: Tab focuses the trigger, Enter/Space opens, Esc closes, j/k or
 // Up/Down selects an option, and Enter confirms it.
@@ -22,6 +23,8 @@ Item {
   property color background: Color.popups.background
   property color popupBorder: Color.popups.border
   property color accent: Color.accent
+  property color badgeColor: accent
+  property color badgeForeground: background
   readonly property var popupBorderSpec: Border.localOrSurfaceSpec("popups", "border", popupBorder, Color.popups.border, Style.normalBorderWidth)
   property string fontFamily: Style.font.family
   property int rowHeight: Style.spacing.controlHeight
@@ -81,11 +84,23 @@ Item {
   function optionLabel(o) {
     return (o && typeof o === "object") ? String(o.label) : String(o)
   }
-  function currentLabel() {
+  function optionBadge(o) {
+    if (!o || typeof o !== "object" || o.badge === undefined || o.badge === null) return ""
+    return String(o.badge)
+  }
+  function currentOption() {
     for (var i = 0; i < options.length; i++) {
-      if (optionValue(options[i]) === value) return optionLabel(options[i])
+      if (optionValue(options[i]) === value) return options[i]
     }
-    return value
+    return null
+  }
+  function currentLabel() {
+    var option = currentOption()
+    return option === null ? value : optionLabel(option)
+  }
+  function currentOptionBadge() {
+    var option = currentOption()
+    return option === null ? "" : optionBadge(option)
   }
 
   implicitWidth: Style.spacing.dropdownWidth
@@ -137,16 +152,39 @@ Item {
 
       Text {
         anchors.left: parent.left
-        anchors.right: chevron.left
+        anchors.right: currentBadgeBubble.visible ? currentBadgeBubble.left : chevron.left
         anchors.verticalCenter: parent.verticalCenter
         anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
-        anchors.rightMargin: trigger.borderRight + Style.spacing.md
+        anchors.rightMargin: Style.spacing.controlGap
         text: root.currentLabel()
         textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
+      }
+
+      Rectangle {
+        id: currentBadgeBubble
+        visible: root.currentOptionBadge() !== ""
+        anchors.right: chevron.left
+        anchors.rightMargin: Style.spacing.controlGap
+        anchors.verticalCenter: parent.verticalCenter
+        height: Style.spacing.huge
+        width: Math.max(height, currentBadgeLabel.implicitWidth + Style.spacing.controlGap)
+        radius: height / 2
+        color: root.badgeColor
+
+        Text {
+          id: currentBadgeLabel
+          anchors.centerIn: parent
+          text: root.currentOptionBadge()
+          textFormat: Text.PlainText
+          color: root.badgeForeground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
       }
 
       Text {
@@ -245,16 +283,39 @@ Item {
 
             Text {
               anchors.left: parent.left
-              anchors.right: parent.right
+              anchors.right: optionBadge.visible ? optionBadge.left : parent.right
               anchors.verticalCenter: parent.verticalCenter
               anchors.leftMargin: Style.spacing.controlPaddingX
-              anchors.rightMargin: Style.spacing.controlPaddingX
+              anchors.rightMargin: Style.spacing.controlGap
               text: root.optionLabel(modelData)
               textFormat: Text.PlainText
               color: index === optionList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               elide: Text.ElideRight
+            }
+
+            Rectangle {
+              id: optionBadge
+              visible: root.optionBadge(modelData) !== ""
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.controlPaddingX
+              anchors.verticalCenter: parent.verticalCenter
+              height: Style.spacing.huge
+              width: Math.max(height, optionBadgeText.implicitWidth + Style.spacing.controlGap)
+              radius: height / 2
+              color: root.badgeColor
+
+              Text {
+                id: optionBadgeText
+                anchors.centerIn: parent
+                text: root.optionBadge(modelData)
+                textFormat: Text.PlainText
+                color: root.badgeForeground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
             }
 
             MouseArea {

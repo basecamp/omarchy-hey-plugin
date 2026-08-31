@@ -32,6 +32,19 @@ TestCase {
     dropdown.close()
     dropdown.y = 0
     dropdown.openUpward = false
+    dropdown.options = ["HEY Terminal UI", "HEY App", "Browser"]
+    dropdown.value = ""
+  }
+
+  function test_object_option_keeps_its_badge_separate_from_its_label() {
+    var option = { value: "personal", label: "Personal", badge: "3" }
+    compare(dropdown.optionLabel(option), "Personal")
+    compare(dropdown.optionBadge(option), "3")
+
+    dropdown.options = [option]
+    dropdown.value = "personal"
+    compare(dropdown.currentLabel(), "Personal")
+    compare(dropdown.currentOptionBadge(), "3")
   }
 
   function test_opens_downward_when_the_list_fits_below() {

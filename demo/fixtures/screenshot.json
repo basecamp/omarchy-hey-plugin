@@ -86,7 +86,7 @@
     {
       "id": 508,
       "account_id": 1002,
-      "state": "seen",
+      "state": "unseen",
       "minutes_ago": 390,
       "name": "Notes from today’s planning session",
       "summary": "Everything from the discussion is captured here, including next steps.",

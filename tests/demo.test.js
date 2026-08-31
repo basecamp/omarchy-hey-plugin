@@ -67,7 +67,7 @@ test("demo CLI fixtures follow the production HEY contracts", () => {
     const notifications = Model.parseNotifications(JSON.stringify(box), 50, accounts.accounts)
     assert.equal(notifications.ok, true)
     assert.equal(notifications.items.length, 8)
-    assert.equal(notifications.items.filter(item => item.unread).length, 6)
+    assert.equal(notifications.items.filter(item => item.unread).length, 7)
     assert.ok(box.data.postings.every(item => item.app_url === ""))
     assert.ok(box.data.postings.every(item => Number.isFinite(Date.parse(item.active_at))))
 
