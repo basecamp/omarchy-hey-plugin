@@ -50,6 +50,7 @@ Item {
   readonly property bool notify: setting("notify", false) === true
   readonly property string openAction: openActionSetting()
   readonly property int accountCount: accounts.length
+  property string accountFilter: ""
   // Every process a refresh drives; a pending refresh waits for all of them.
   readonly property bool busy: refreshing || probeProcess.running || accountsProcess.running || notificationProcess.running || screenerProcess.running
 
@@ -128,6 +129,20 @@ Item {
     var email = String(setting("emailClickAction", ""))
     return toast === email && choices.indexOf(toast) !== -1 ? toast : "tui"
   }
+
+  function setAccountFilter(value) {
+    accountFilter = String(value || "")
+  }
+
+  function ensureAccountFilter() {
+    if (accountFilter === "") return
+    for (var i = 0; i < accounts.length; i++) {
+      if (String(accounts[i].id) === accountFilter) return
+    }
+    setAccountFilter("")
+  }
+
+  onAccountsChanged: ensureAccountFilter()
 
   function conciseError(value, fallback) {
     var source = Model.boundedString(value || fallback || "HEY request failed", Model.remoteErrorCharacterLimit)

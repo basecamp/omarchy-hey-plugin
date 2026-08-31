@@ -15,6 +15,14 @@ TestCase {
     Service {}
   }
 
+  Component {
+    id: barViewComponent
+    QtObject {
+      property var service: null
+      readonly property string accountFilter: service ? service.accountFilter : "missing"
+    }
+  }
+
   function init() {
     Quickshell.resetDetachedCommands()
     service = serviceComponent.createObject(this)
@@ -143,6 +151,34 @@ TestCase {
       if (JSON.stringify(process.command) === expected) return process
     }
     return null
+  }
+
+  function test_account_filter_defaults_to_all_accounts() {
+    compare(service.accountFilter, "")
+  }
+
+  function test_two_bar_views_share_the_account_filter() {
+    var viewA = barViewComponent.createObject(this, { service: service })
+    var viewB = barViewComponent.createObject(this, { service: service })
+
+    service.setAccountFilter("42")
+    compare(viewA.accountFilter, "42")
+    compare(viewB.accountFilter, "42")
+
+    viewA.destroy()
+    viewB.destroy()
+  }
+
+  function test_stale_account_filter_clears_when_accounts_change() {
+    service.setAccountFilter("gone")
+    service.accounts = [{ id: "1", name: "Personal" }]
+    compare(service.accountFilter, "")
+  }
+
+  function test_matching_account_filter_is_kept_when_accounts_change() {
+    service.setAccountFilter("1")
+    service.accounts = [{ id: "1", name: "Personal" }]
+    compare(service.accountFilter, "1")
   }
 
   function test_setup_stays_running_until_completion() {

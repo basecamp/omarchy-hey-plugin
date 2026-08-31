@@ -16,7 +16,7 @@ Panel {
   property int selectedIndex: 0
   property bool cursorActive: false
   property double nowMs: Date.now()
-  property string accountFilter: ""
+  readonly property string accountFilter: service.accountFilter
   property string stateFilter: "unread"
   property bool settingsOpen: false
   property bool pendingSettingsOpen: false
@@ -88,14 +88,6 @@ Panel {
   onServiceChanged: pushSettings()
   Component.onCompleted: pushSettings()
 
-  function ensureAccountFilter() {
-    if (accountFilter === "") return
-    for (var i = 0; i < service.accounts.length; i++) {
-      if (String(service.accounts[i].id) === accountFilter) return
-    }
-    setAccountFilter("")
-  }
-
   function resetFilteredView() {
     selectedIndex = 0
     cursorActive = false
@@ -107,7 +99,7 @@ Panel {
   }
 
   function setAccountFilter(value) {
-    accountFilter = String(value || "")
+    service.setAccountFilter(value)
     resetFilteredView()
   }
 
@@ -325,11 +317,6 @@ Panel {
   Service {
     id: localService
     active: root.sharedService === null
-  }
-
-  Connections {
-    target: root.service
-    function onAccountsChanged() { root.ensureAccountFilter() }
   }
 
   Timer {

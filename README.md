@@ -7,7 +7,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 ## Features
 
 - Shows unseen Imbox email from every linked HEY account.
-- Switches between accounts with a dropdown that shows the unread count per account.
+- Switches between accounts with a dropdown that shows the unread count per account and shares the selection across every monitor.
 - Splits email into `New for you` and `Previously seen` tabs.
 - Shows the pending Screener count without including it in the unread count.
 - Updates live: the panel and the logo follow your Imbox as it changes, over HEY's own change feed — a thread you archive in `hey tui`, on your phone or in the web app leaves the panel within a second.
