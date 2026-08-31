@@ -35,7 +35,7 @@ Item {
   property bool probeError: false
   property var accounts: []
   property var notifications: []
-  property int unreadCount: 0
+  readonly property int unreadCount: Model.unreadCount(notifications, accountFilter)
   property int screenerCount: 0
   property date lastUpdated: new Date(0)
   property string lastError: ""
@@ -194,7 +194,6 @@ Item {
       installed = false
       authenticated = true
       notifications = []
-      unreadCount = 0
       screenerCount = 0
       refreshing = false
       stopWatch()
@@ -262,7 +261,6 @@ Item {
   function signedOut() {
     authenticated = false
     notifications = []
-    unreadCount = 0
     screenerCount = 0
     refreshing = false
     stopWatch()
@@ -425,9 +423,6 @@ Item {
 
   function finishRefresh(items) {
     notifications = Model.sortNotifications(items)
-    var unread = 0
-    for (var i = 0; i < notifications.length; i++) if (notifications[i].unread) unread += 1
-    unreadCount = unread
     refreshing = false
     lastUpdated = new Date()
   }
@@ -478,7 +473,6 @@ Item {
 
   function setReadOptimistically(item) {
     var changed = []
-    var marked = false
     for (var i = 0; i < notifications.length; i++) {
       var existing = notifications[i]
       if (String(existing.id) === String(item.id) && existing.unread) {
@@ -486,13 +480,11 @@ Item {
         for (var key in existing) replacement[key] = existing[key]
         replacement.unread = false
         changed.push(replacement)
-        marked = true
       } else {
         changed.push(existing)
       }
     }
     notifications = changed
-    if (marked) unreadCount = Math.max(0, unreadCount - 1)
   }
 
   function runNextRead() {

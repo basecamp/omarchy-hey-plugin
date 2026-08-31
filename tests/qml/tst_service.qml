@@ -19,6 +19,7 @@ TestCase {
     id: barViewComponent
     QtObject {
       property var service: null
+      readonly property int unreadCount: service ? service.unreadCount : -1
       readonly property string accountFilter: service ? service.accountFilter : "missing"
     }
   }
@@ -158,12 +159,20 @@ TestCase {
   }
 
   function test_two_bar_views_share_the_account_filter() {
+    service.notifications = [
+      { id: "a", accountId: "42", unread: true },
+      { id: "b", accountId: "7", unread: true }
+    ]
     var viewA = barViewComponent.createObject(this, { service: service })
     var viewB = barViewComponent.createObject(this, { service: service })
+    compare(viewA.unreadCount, 2)
+    compare(viewB.unreadCount, 2)
 
     service.setAccountFilter("42")
     compare(viewA.accountFilter, "42")
     compare(viewB.accountFilter, "42")
+    compare(viewA.unreadCount, 1)
+    compare(viewB.unreadCount, 1)
 
     viewA.destroy()
     viewB.destroy()
@@ -179,6 +188,19 @@ TestCase {
     service.setAccountFilter("1")
     service.accounts = [{ id: "1", name: "Personal" }]
     compare(service.accountFilter, "1")
+  }
+
+  function test_unread_count_follows_the_account_filter() {
+    service.notifications = [
+      { id: "a", accountId: "1", unread: true },
+      { id: "b", accountId: "2", unread: true }
+    ]
+
+    compare(service.unreadCount, 2)
+    service.setAccountFilter("1")
+    compare(service.unreadCount, 1)
+    service.setAccountFilter("missing")
+    compare(service.unreadCount, 0)
   }
 
   function test_setup_stays_running_until_completion() {

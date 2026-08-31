@@ -284,6 +284,20 @@ test("filterNotifications combines account and state filters", () => {
   assert.deepEqual(Model.filterNotifications(null, "", "all"), [])
 })
 
+test("unreadCount counts all accounts or a selected account", () => {
+  const items = [
+    { id: "new-a", accountId: "a", unread: true },
+    { id: "new-b", accountId: "b", unread: true },
+    { id: "old-a", accountId: "a", unread: false }
+  ]
+
+  assert.equal(Model.unreadCount(items, ""), 2)
+  assert.equal(Model.unreadCount(items, "a"), 1)
+  assert.equal(Model.unreadCount(items, "b"), 1)
+  assert.equal(Model.unreadCount(items, "missing"), 0)
+  assert.equal(Model.unreadCount(null, "a"), 0)
+})
+
 test("accountFilterOptions sorts accounts without mutating them", () => {
   const accounts = [{ id: 2, name: "Zulu" }, { id: 1, name: "alpha" }, { id: 3 }]
   assert.deepEqual(Model.accountFilterOptions(accounts), [

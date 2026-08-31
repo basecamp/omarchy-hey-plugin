@@ -15,7 +15,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - Provides panel settings for the app that opens email and the Screener, and for notification state.
 - Shows sender initials in a colored avatar on each email row.
 - Opens email topics in HEY and marks unseen postings as seen.
-- Changes the bar logo color when unseen email exists.
+- Changes the bar logo color when the currently selected account has unseen email.
 - Rechecks the Imbox and Screener every 10 minutes as a fallback for the live connection. Right-click or middle-click the bar logo to refresh immediately.
 
 ## Requirements
