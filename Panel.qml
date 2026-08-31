@@ -314,6 +314,11 @@ Panel {
     active: root.sharedService === null
   }
 
+  Connections {
+    target: root.service
+    function onAccountFilterChanged() { root.resetFilteredView() }
+  }
+
   Timer {
     id: phraseTimer
     interval: 2800
