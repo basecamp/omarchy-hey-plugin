@@ -10,6 +10,12 @@ test("account selection is shared through the service", () => {
   assert.match(panel, /function setAccountFilter\(value\)\s*{\s*service\.setAccountFilter\(value\)/)
 })
 
+test("account options expose unread counts as styled badges", () => {
+  assert.match(panel, /label:\s*options\[i\]\.label,\s*badge:\s*count > 0 \? String\(count\) : ""/)
+  assert.match(panel, /function accountUnreadCount\(accountId\)\s*{\s*return Model\.unreadCount\(service\.notifications, String\(accountId \|\| ""\)\)/)
+  assert.match(panel, /id:\s*accountDropdown[\s\S]*?badgeColor:\s*root\.urgent/)
+})
+
 test("shared account changes reset each panel's filtered view", () => {
   assert.match(panel, /Connections\s*{\s*target:\s*root\.service\s*function onAccountFilterChanged\(\)\s*{\s*root\.resetFilteredView\(\)/)
 })
