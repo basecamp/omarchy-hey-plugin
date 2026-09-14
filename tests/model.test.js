@@ -135,7 +135,7 @@ test("boundedCaptureCommand cleans up a descendant after its leader exits", () =
   }
 })
 
-test("boundedCaptureCommand terminates the payload process group with its wrapper", async () => {
+test("boundedCaptureCommand terminates the payload process group under repeated wrapper signals", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hey-output-guard-"))
   const pidPath = path.join(directory, "payload.pid")
   const command = Model.boundedCaptureCommand([
@@ -152,6 +152,8 @@ test("boundedCaptureCommand terminates the payload process group with its wrappe
     assert.ok(payloadPid > 0, "the payload started")
 
     wrapper.kill("SIGTERM")
+    await delay(10)
+    wrapper.kill("SIGHUP")
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("output guard did not exit")), 2000)
       wrapper.once("exit", () => {
