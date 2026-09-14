@@ -2,7 +2,7 @@ const test = require("node:test")
 const assert = require("node:assert/strict")
 const {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, rmSync, symlinkSync, writeFileSync
+  readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync
 } = require("node:fs")
 const { tmpdir } = require("node:os")
 const path = require("node:path")
@@ -244,7 +244,7 @@ test("demo run stops its shell and retains recovery artifacts after restore fail
     const child = spawn(demoRun, [], { env: subject.env })
     const result = collect(child)
     await waitFor(() => existsSync(subject.installedPlugin) && lstatSync(subject.installedPlugin).isSymbolicLink(), "demo plugin was not linked")
-    rmSync(subject.installedPlugin)
+    unlinkSync(subject.installedPlugin)
     mkdirSync(subject.installedPlugin)
     child.kill("SIGTERM")
     const finished = await result
