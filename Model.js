@@ -623,6 +623,7 @@ function normalizeNotification(value, accountsById) {
     timestampMs: parsedTime,
     url: boundedString(posting.app_url || "", remoteUrlCharacterLimit),
     unread: posting.seen !== true,
+    bubbledUp: posting.bubbled_up === true,
     unreadCount: boundedRemoteCount(posting.visible_entry_count, 1)
   }
 }

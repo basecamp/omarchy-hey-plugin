@@ -179,6 +179,7 @@ test("parseNotifications normalizes postings and account metadata", () => {
     timestampMs: Date.parse("2025-02-03T12:00:00Z"),
     url: "https://app.hey.com/topics/email-1",
     unread: true,
+    bubbledUp: false,
     unreadCount: 3
   })
 })

@@ -14,7 +14,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - Toasts new mail when you turn notifications on — one notification per batch of changes at most, replaced rather than stacked, silenced by Omarchy's notification toggle.
 - Provides panel settings for the app that opens email and the Screener, and for notification state.
 - Shows sender initials in a colored avatar on each email row.
-- Opens email topics in HEY and marks unseen postings as seen.
+- Opens email topics in HEY and marks unseen postings as seen without popping Bubbled Up threads.
 - Changes the bar logo color when the currently selected account has unseen email.
 - Rechecks the Imbox and Screener every 10 minutes as a fallback for the live connection. Right-click or middle-click the bar logo to refresh immediately.
 
@@ -59,7 +59,7 @@ Plugin removal unloads HEY and removes its checkout. The HEY CLI installation, i
 - Right-click or middle-click the logo to refresh.
 - Select `New for you` or `Previously seen` below the account dropdown.
 - Pick an account from the dropdown when more than one account is linked. A dot on the dropdown shows unread email in other accounts.
-- Click an email to open it in HEY and mark it as seen. Click the count badge to mark it as seen without opening it.
+- Click an email to open it in HEY and mark it as seen. A Bubbled Up email stays bubbled when opened. Click the count badge to mark an email as seen without opening it, which also pops a Bubbled Up email.
 - Click the cog to flip the panel to its settings. The back arrow returns to email.
 - Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
 - Click the Screener count or press `S` to open it in the destination selected under `OPEN EMAILS IN`.
