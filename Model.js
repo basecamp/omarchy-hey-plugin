@@ -83,13 +83,12 @@ var remoteErrorCharacterLimit = 512
 var remoteHintCharacterLimit = 512
 var remoteCodeCharacterLimit = 64
 
-var boundedCaptureScript = "stdout_limit=$1; stderr_limit=$2; deadline=$3; grace=$4; shift 4; child_pid=; timer_pid=; killer_pid=; timed_out=0; "
+var boundedCaptureScript = "stdout_limit=$1; stderr_limit=$2; deadline=$3; grace=$4; shift 4; child_pid=; timer_pid=; timed_out=0; "
   + "stop_timer() { if [ -n \"$timer_pid\" ]; then kill -TERM -- \"-$timer_pid\" 2>/dev/null || true; kill -TERM \"$timer_pid\" 2>/dev/null || true; wait \"$timer_pid\" 2>/dev/null || true; timer_pid=; fi; }; "
-  + "start_group_killer() { setpriv --pdeathsig KILL setsid bash -c 'end=$((SECONDS + $1)); while kill -0 -- \"-$2\" 2>/dev/null && [ \"$SECONDS\" -lt \"$end\" ]; do sleep 0.1; done; kill -KILL -- \"-$2\" 2>/dev/null || true' hey-output-killer \"$grace\" \"$child_pid\" & killer_pid=$!; }; "
-  + "wait_group_killer() { if [ -n \"$killer_pid\" ]; then wait \"$killer_pid\" 2>/dev/null || true; killer_pid=; fi; }; "
-  + "cleanup_group() { if [ -n \"$child_pid\" ] && kill -0 -- \"-$child_pid\" 2>/dev/null; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; start_group_killer; wait_group_killer; fi; }; "
-  + "terminate_child() { if [ -n \"$child_pid\" ]; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; kill -TERM \"$child_pid\" 2>/dev/null || true; start_group_killer; wait \"$child_pid\" 2>/dev/null || true; wait_group_killer; child_pid=; fi; }; "
-  + "stop_child() { trap - HUP INT TERM USR1; stop_timer; terminate_child; exit 143; }; "
+  + "wait_for_group() { end=$((SECONDS + grace)); while kill -0 -- \"-$child_pid\" 2>/dev/null && [ \"$SECONDS\" -lt \"$end\" ]; do sleep 0.1; done; }; "
+  + "cleanup_group() { if [ -n \"$child_pid\" ] && kill -0 -- \"-$child_pid\" 2>/dev/null; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; wait_for_group; kill -KILL -- \"-$child_pid\" 2>/dev/null || true; fi; }; "
+  + "terminate_child() { if [ -n \"$child_pid\" ]; then kill -TERM -- \"-$child_pid\" 2>/dev/null || true; kill -TERM \"$child_pid\" 2>/dev/null || true; wait_for_group; kill -KILL -- \"-$child_pid\" 2>/dev/null || true; wait \"$child_pid\" 2>/dev/null || true; child_pid=; fi; }; "
+  + "stop_child() { trap '' HUP INT TERM USR1; stop_timer; terminate_child; exit 143; }; "
   + "trap 'timed_out=1' USR1; trap stop_child HUP INT TERM; "
   + "setpriv --pdeathsig KILL setsid \"$@\" "
   + "> >(head -c \"$((stdout_limit + 1))\") "
@@ -623,6 +622,7 @@ function normalizeNotification(value, accountsById) {
     timestampMs: parsedTime,
     url: boundedString(posting.app_url || "", remoteUrlCharacterLimit),
     unread: posting.seen !== true,
+    bubbledUp: posting.bubbled_up === true,
     unreadCount: boundedRemoteCount(posting.visible_entry_count, 1)
   }
 }

@@ -253,6 +253,34 @@ TestCase {
     compare(service.notifications[0].accountName, "Personal")
   }
 
+  function test_opening_a_bubbled_up_thread_preserves_its_bubble() {
+    var box = refreshToBox(true)
+    box.complete(0, '{"ok":true,"data":{"id":1,"name":"Imbox","postings":[' +
+      '{"id":7,"name":"Bubbled thread","seen":false,"bubbled_up":true,"account_id":1,"app_url":"https://app.hey.com/topics/5511"},' +
+      '{"id":8,"name":"New thread","seen":false,"account_id":1,"app_url":"https://app.hey.com/topics/5512"}]}}', "")
+    findHeyProcess("screener").complete(0, "0", "")
+
+    var bubbled = service.notifications[0]
+    var ordinary = service.notifications[1]
+    compare(bubbled.id, "7")
+    compare(ordinary.id, "8")
+
+    service.openNotification(ordinary)
+    var seen = findHeyProcess("seen")
+    verify(seen !== null)
+    compare(processCommand(seen), ["hey", "seen", "8", "--account", "1", "--json"])
+    seen.complete(0, '{"ok":true,"data":{}}', "")
+
+    service.openNotification(bubbled)
+
+    verify(!seen.running, "opening a bubbled-up thread must not mark it seen and pop it")
+    compare(service.notifications[0].unread, true)
+
+    service.markRead(bubbled)
+    verify(seen.running, "the explicit mark-seen action must still pop the bubble")
+    compare(processCommand(seen), ["hey", "seen", "7", "--account", "1", "--json"])
+  }
+
   function test_box_drops_the_account_filter_for_an_older_cli() {
     var box = refreshToBox(false)
     compare(processCommand(box), ["hey", "box", "imbox", "--limit", "50", "--json"])

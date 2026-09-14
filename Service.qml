@@ -439,7 +439,9 @@ Item {
       if (openAction === "app") Quickshell.execDetached(["omarchy-launch-webapp", url])
       else Qt.openUrlExternally(url)
     }
-    if (item.unread) markRead(item)
+    // HEY keeps Bubbled Up as a special unseen state. Marking it seen pops
+    // it, so opening alone must leave that explicit action to the user.
+    if (item.unread && !item.bubbledUp) markRead(item)
   }
 
   function openScreener() {
