@@ -48,6 +48,9 @@ Item {
   // the previous one, identified as HEY so Omarchy's notification silencing
   // applies. Off unless the bar entry says true.
   readonly property bool notify: setting("notify", false) === true
+  // Off by default so unread mail uses the urgent color unless the user opts
+  // out of that attention signal.
+  readonly property bool disableUrgentTrayColor: setting("disableUrgentTrayColor", false) === true
   readonly property string openAction: openActionSetting()
   readonly property int accountCount: accounts.length
   property string accountFilter: ""

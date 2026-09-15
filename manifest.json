@@ -27,6 +27,7 @@
     "defaultSection": "right",
     "defaults": {
       "notify": false,
+      "disableUrgentTrayColor": false,
       "openAction": "tui"
     },
     "schema": [
@@ -34,6 +35,12 @@
         "key": "notify",
         "type": "boolean",
         "label": "Notifications",
+        "defaultValue": false
+      },
+      {
+        "key": "disableUrgentTrayColor",
+        "type": "boolean",
+        "label": "Disable urgent tray color",
         "defaultValue": false
       },
       {

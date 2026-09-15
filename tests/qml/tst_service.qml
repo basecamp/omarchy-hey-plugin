@@ -540,6 +540,16 @@ TestCase {
     verify(findToastProcess() === null || !findToastProcess().running)
   }
 
+  function test_urgent_tray_color_is_enabled_unless_explicitly_disabled() {
+    compare(service.disableUrgentTrayColor, false)
+
+    service.settings = { disableUrgentTrayColor: true }
+    compare(service.disableUrgentTrayColor, true)
+
+    service.settings = { disableUrgentTrayColor: "true" }
+    compare(service.disableUrgentTrayColor, false)
+  }
+
   function test_refresh_interval_stays_at_ten_minutes() {
     service.settings = { refreshIntervalSec: 60 }
     compare(service.refreshIntervalSec, 600)
