@@ -429,7 +429,7 @@ Panel {
         HeyIcon {
           anchors.centerIn: parent
           iconSize: Style.space(12)
-          color: service.unreadCount > 0 ? root.urgent : root.foreground
+          color: service.unreadCount > 0 ? root.urgent : button.foreground
         }
       }
     }
