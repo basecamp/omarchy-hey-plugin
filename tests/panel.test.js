@@ -35,7 +35,7 @@ test("urgent tray color is enabled by default and configurable below notificatio
   })
   assert.match(panel, /id:\s*notificationSetting[\s\S]*?id:\s*disableUrgentTrayColorSetting/)
   assert.match(panel, /id:\s*disableUrgentTrayColorSetting[\s\S]*?checked:\s*service\.disableUrgentTrayColor/)
-  assert.match(panel, /color:\s*!service\.disableUrgentTrayColor && service\.unreadCount > 0 \? root\.urgent : button\.foreground/)
+  assert.match(panel, /color:\s*!service\.disableUrgentTrayColor && service\.unreadCount > 0 \? root\.urgent : root\.foreground/)
 })
 
 test("setup panel keeps the HEY branding header visible", () => {
