@@ -24,6 +24,10 @@ test("bar tooltip stays hidden while HEY setup is needed", () => {
   assert.match(panel, /tooltipText:\s*root\.needsSetup\s*\?\s*""\s*:\s*service\.refreshing/)
 })
 
+test("bar icon uses the bar's effective foreground when there is no unread mail", () => {
+  assert.match(panel, /color:\s*service\.unreadCount > 0 \? root\.urgent : button\.foreground/)
+})
+
 test("setup panel keeps the HEY branding header visible", () => {
   assert.match(panel, /Column\s*{\s*id:\s*fixedContent\s*Layout\.fillWidth/)
   const header = panel.slice(panel.indexOf("id: fixedContent"), panel.indexOf("PanelSeparator", panel.indexOf("id: fixedContent")))
