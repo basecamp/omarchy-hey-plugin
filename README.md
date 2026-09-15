@@ -99,6 +99,8 @@ The bar logo's tooltip says `live` while the watch has said `ready` and not `dis
 
 Off by default. The Notifications setting turns new-mail toasts on; so do `hey setup omarchy --notify` and `omarchy bar set 37signals.hey notify true --json`. Each option updates the `notify` key on the plugin's entry in `~/.config/omarchy/shell.json`, which the shell hot-reloads. Flipping it only gates the toasts; the watch runs on, and nothing restarts.
 
+**Disable urgent tray color** is off by default, so unread mail colors the HEY bar icon with the theme's urgent color. Turn it on to keep the icon at the bar's normal foreground color. The setting affects only the bar icon; urgent colors inside the panel are unchanged.
+
 The **Open emails in** setting chooses one destination for panel emails and new-mail notifications. **HEY Terminal UI** is the default, **HEY App** opens a dedicated Omarchy web-app window, and **Browser** opens HEY in the normal browser. A single notification opens its thread, while a grouped notification opens the Imbox because it represents multiple threads.
 
 Every `added` and `updated` line `hey watch` writes says whether the thread is new mail — unseen, unmuted, and active since the watch last saw it, or since the watch began for a thread it has not seen, so a box's backlog is never new and neither is reading, muting or moving a thread, while a reply on a known thread is. That is the CLI's call, made once on HEY's own clock. The plugin reads those lines for the Imbox — the watch follows every box, but only Imbox mail asks for attention — and sends the toast itself through `omarchy-notification-send`:

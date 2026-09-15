@@ -4,6 +4,7 @@ const fs = require("node:fs")
 const path = require("node:path")
 
 const panel = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"))
 
 test("account selection is shared through the service", () => {
   assert.match(panel, /readonly property string accountFilter:\s*service\.accountFilter/)
@@ -22,6 +23,19 @@ test("shared account changes reset each panel's filtered view", () => {
 
 test("bar tooltip stays hidden while HEY setup is needed", () => {
   assert.match(panel, /tooltipText:\s*root\.needsSetup\s*\?\s*""\s*:\s*service\.refreshing/)
+})
+
+test("urgent tray color is enabled by default and configurable below notifications", () => {
+  assert.equal(manifest.barWidget.defaults.disableUrgentTrayColor, false)
+  assert.deepEqual(manifest.barWidget.schema.find(setting => setting.key === "disableUrgentTrayColor"), {
+    key: "disableUrgentTrayColor",
+    type: "boolean",
+    label: "Disable urgent tray color",
+    defaultValue: false
+  })
+  assert.match(panel, /id:\s*notificationSetting[\s\S]*?id:\s*disableUrgentTrayColorSetting/)
+  assert.match(panel, /id:\s*disableUrgentTrayColorSetting[\s\S]*?checked:\s*service\.disableUrgentTrayColor/)
+  assert.match(panel, /color:\s*!service\.disableUrgentTrayColor && service\.unreadCount > 0 \? root\.urgent : root\.foreground/)
 })
 
 test("setup panel keeps the HEY branding header visible", () => {

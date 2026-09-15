@@ -166,6 +166,10 @@ Panel {
     persistSettings({ notify: !service.notify })
   }
 
+  function toggleDisableUrgentTrayColor() {
+    persistSettings({ disableUrgentTrayColor: !service.disableUrgentTrayColor })
+  }
+
   function showSettings(open) {
     var next = open === true
     if (settingsOpen === next || pageFlip.running) return
@@ -429,7 +433,7 @@ Panel {
         HeyIcon {
           anchors.centerIn: parent
           iconSize: Style.space(12)
-          color: service.unreadCount > 0 ? root.urgent : root.foreground
+          color: !service.disableUrgentTrayColor && service.unreadCount > 0 ? root.urgent : root.foreground
         }
       }
     }
@@ -1009,6 +1013,18 @@ Panel {
               accent: Color.accent
               fontFamily: root.fontFamily
               onClicked: root.toggleNotify()
+            }
+
+            Toggle {
+              id: disableUrgentTrayColorSetting
+              width: parent.width
+              label: "Disable urgent tray color"
+              description: "Keep the HEY bar icon at its normal color when unread email arrives."
+              checked: service.disableUrgentTrayColor
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.toggleDisableUrgentTrayColor()
             }
 
             Column {
