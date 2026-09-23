@@ -9,6 +9,7 @@ A Quickshell bar plugin that shows unread and recent email from your HEY Imbox t
 - Shows unseen Imbox email from every linked HEY account.
 - Switches between accounts with a dropdown that shows the unread count per account and shares the selection across every monitor.
 - Splits email into `New for you` and `Previously seen` tabs.
+- Searches HEY email from a third `Search` tab, with live results after 3 characters.
 - Shows the pending Screener count without including it in the unread count.
 - Updates live: the panel and the logo follow your Imbox as it changes, over HEY's own change feed — a thread you archive in `hey tui`, on your phone or in the web app leaves the panel within a second.
 - Toasts new mail when you turn notifications on — one notification per batch of changes at most, replaced rather than stacked, silenced by Omarchy's notification toggle.
@@ -58,10 +59,11 @@ Plugin removal unloads HEY and removes its checkout. The HEY CLI installation, i
 - Left-click the HEY logo to open or close the panel.
 - Right-click or middle-click the logo to refresh.
 - Select `New for you` or `Previously seen` below the account dropdown.
+- Select `Search` or press `/`, then type your query. Results update after a 300 ms typing pause once you enter 3 characters. Press Enter to search a shorter query. Results cover HEY email beyond the Imbox and follow the selected account. `All accounts` combines the first page from each linked account, showing up to 50 matches with their account names. Opening a result clears the query, returns to `New for you`, and closes the panel.
 - Pick an account from the dropdown when more than one account is linked. A dot on the dropdown shows unread email in other accounts.
 - Click an email to open it in HEY and mark it as seen. A Bubbled Up email stays bubbled when opened. Click the count badge to mark an email as seen without opening it, which also pops a Bubbled Up email.
 - Click the cog to flip the panel to its settings. The back arrow returns to email.
-- Use the up and down arrow keys to move through email. Use the left and right arrow keys to cycle accounts.
+- Use the up and down arrow keys to move through email and Enter to open it. In Search, you can keep typing while navigating results. Left and right edit the query there; elsewhere they cycle accounts.
 - Click the Screener count or press `S` to open it in the destination selected under `OPEN EMAILS IN`.
 - Press `U` for new email, `P` for previously seen email, `N` to toggle notifications, or `R` to refresh.
 
@@ -119,6 +121,7 @@ hey auth status --json
 hey account list --json
 hey accounts list --json  # HEY CLI 0.2.2 compatibility
 hey box imbox --account all --limit <count> --json
+hey search --account <id> --json -- <query>
 hey --account all watch --events added,updated,deleted,new,resync
 hey screener list --count --json
 hey seen <posting-id> [--account <id>] --json

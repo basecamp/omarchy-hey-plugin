@@ -18,6 +18,7 @@ Panel {
   property double nowMs: Date.now()
   readonly property string accountFilter: service.accountFilter
   property string stateFilter: "unread"
+  readonly property bool searchView: stateFilter === "search"
   property bool settingsOpen: false
   property bool pendingSettingsOpen: false
 
@@ -30,7 +31,8 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, accountFilter, stateFilter)
+  readonly property var filteredNotifications: searchView
+    ? mailSearch.results : Model.filterNotifications(service.notifications, accountFilter, stateFilter)
   readonly property var accountFilterOptions: Model.accountFilterOptions(service.accounts)
 
   readonly property var accountDropdownOptions: {
@@ -107,9 +109,21 @@ Panel {
   function setStateFilter(value) {
     stateFilter = String(value || "unread")
     resetFilteredView()
+    Qt.callLater(root.focusContent)
+  }
+
+  function focusContent() {
+    if (!opened || settingsOpen) return
+    if (searchView && !needsSetup) searchField.forceActiveFocus()
+    else keyCatcher.forceActiveFocus()
   }
 
   function emptyMessage() {
+    if (searchView) {
+      if (mailSearch.searching) return "Searching…"
+      if (mailSearch.error !== "") return mailSearch.error
+      return mailSearch.ready || mailSearch.submitted ? "No matching email." : ""
+    }
     if (service.notifications.length === 0 || stateFilter === "unread") return "You're all caught up."
     return "No previously seen email."
   }
@@ -225,7 +239,16 @@ Panel {
 
   function activateSelection() {
     if (!cursorActive || filteredNotifications.length === 0) return
-    service.openNotification(filteredNotifications[selectedIndex])
+    openEmail(filteredNotifications[selectedIndex])
+  }
+
+  function openEmail(item) {
+    service.openNotification(item)
+    if (searchView) {
+      searchField.clear()
+      setStateFilter("unread")
+      close()
+    }
   }
 
   function scrollSelectionIntoView() {
@@ -262,7 +285,7 @@ Panel {
     if (settingsFlick) settingsFlick.contentY = 0
     service.checkSetupRunning()
     service.refreshIfStale()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(root.focusContent)
   }
 
   onFilteredNotificationsChanged: ensureSelection()
@@ -311,6 +334,15 @@ Panel {
   Service {
     id: localService
     active: root.sharedService === null
+  }
+
+  Search {
+    id: mailSearch
+    active: root.opened && root.searchView && !root.settingsOpen && !root.needsSetup
+    query: searchField.text
+    accountId: root.accountFilter
+    accounts: service.accounts
+    onAuthenticationRequired: service.signedOut()
   }
 
   Connections {
@@ -380,7 +412,7 @@ Panel {
     ScriptAction {
       script: Qt.callLater(function() {
         if (root.settingsOpen) notificationSetting.forceActiveFocus()
-        else keyCatcher.forceActiveFocus()
+        else root.focusContent()
       })
     }
   }
@@ -451,7 +483,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: root.searchView && !root.needsSetup && !root.settingsOpen ? searchField : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
     contentHeight: panel.fittedContentHeight(root.settingsOpen
       ? settingsHeader.implicitHeight + settingsContent.implicitHeight + Style.space(24)
@@ -462,7 +494,7 @@ Panel {
       anchors.fill: parent
       // Settings controls own their native focus chain and keys. The page-level
       // Escape handler below returns to email after an open dropdown closes.
-      blocked: root.settingsOpen || accountDropdown.popupOpen || openActionDropdown.popupOpen
+      blocked: root.settingsOpen || searchField.activeFocus || accountDropdown.popupOpen || openActionDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
         if (root.settingsOpen) return
         if (dx !== 0) root.cycleAccountFilter(dx)
@@ -479,6 +511,7 @@ Panel {
         if (text === "r" || text === "R") service.refresh()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
+        else if (text === "/") root.setStateFilter("search")
         else if (text === "s" || text === "S") service.openScreener()
         else if (text === "n" || text === "N") root.toggleNotify()
       }
@@ -567,7 +600,10 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               enabled: !service.refreshing
-              onClicked: service.refresh()
+              onClicked: {
+                service.refresh()
+                if (root.searchView) mailSearch.restart()
+              }
             }
           }
 
@@ -592,7 +628,7 @@ Panel {
             // closes, and its own key handler eats Enter/Space/Down. Hand
             // focus back to the key catcher so arrows drive the list again.
             // callLater runs after the popup's internal focus juggling.
-            onPopupOpenChanged: if (!popupOpen) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+            onPopupOpenChanged: if (!popupOpen) Qt.callLater(root.focusContent)
 
             // Binding element (not an inline binding) so it survives the
             // imperative `value` write Dropdown makes on selection.
@@ -642,6 +678,19 @@ Panel {
               onClicked: root.setStateFilter("previous")
             }
 
+            Button {
+              text: "SEARCH"
+              selected: root.searchView
+              foreground: root.foreground
+              background: "transparent"
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(7)
+              verticalPadding: Style.space(1)
+              onClicked: root.setStateFilter("search")
+            }
+
             Item {
               Layout.fillWidth: true
             }
@@ -656,6 +705,31 @@ Panel {
               horizontalPadding: Style.space(7)
               verticalPadding: Style.space(1)
               onClicked: service.openScreener()
+            }
+          }
+
+          TextField {
+            id: searchField
+            visible: root.searchView && !root.needsSetup
+            width: parent.width
+            placeholderText: "Search…"
+            Accessible.name: "Search email"
+            Accessible.description: "Press Enter to search. Use up and down to select a result, then Enter to open it."
+            foreground: root.foreground
+            accent: Color.accent
+            font.family: root.fontFamily
+            maximumLength: Model.remoteExcerptCharacterLimit
+            onTextChanged: root.resetFilteredView()
+            Keys.onDownPressed: root.moveSelection(1)
+            Keys.onUpPressed: root.moveSelection(-1)
+            Keys.onEscapePressed: root.close()
+            onAccepted: {
+              if (root.filteredNotifications.length === 0) {
+                mailSearch.submit()
+                return
+              }
+              if (!root.cursorActive) root.select(0)
+              root.activateSelection()
             }
           }
         }
@@ -761,15 +835,33 @@ Panel {
             }
 
             Text {
-              visible: !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: text !== "" && !root.needsSetup && root.filteredNotifications.length === 0
+                && (root.searchView || (!service.refreshing && service.lastError === ""))
               width: parent.width
               text: root.emptyMessage()
-              color: root.dim
+              textFormat: Text.PlainText
+              color: root.searchView && mailSearch.error !== "" ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
               topPadding: Style.space(16)
               bottomPadding: Style.space(18)
+            }
+
+            Button {
+              visible: !root.needsSetup && root.searchView && mailSearch.error !== ""
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "Retry search"
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              bordered: true
+              focusable: true
+              onClicked: {
+                mailSearch.restart()
+                root.focusContent()
+              }
             }
 
             Column {
@@ -798,12 +890,13 @@ Panel {
                     onPositionChanged: function(mouse) {
                       if (pointerGate.moved(notificationRow, mouse)) root.select(notificationRow.index)
                     }
-                    onClicked: service.openNotification(notificationRow.modelData)
+                    onClicked: root.openEmail(notificationRow.modelData)
                   }
 
                   PanelToolTip {
                     visible: rowMouse.containsMouse
-                    text: "Email" + (notificationRow.modelData.unread ? " · Unseen" : " · Seen")
+                    text: "Email" + (notificationRow.modelData.unread === true ? " · Unseen"
+                      : notificationRow.modelData.unread === false ? " · Seen" : "")
                     fontFamily: root.fontFamily
                   }
 

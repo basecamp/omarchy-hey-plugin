@@ -75,6 +75,91 @@ test("boxCommand reads the Imbox for the panel's threads through a bounded captu
     ["hey", "box", "imbox", "--limit", "50", "--json"])
 })
 
+test("searchCommand keeps arbitrary queries positional and scopes the request", () => {
+  for (const query of ["quarterly planning", "--help", "filters", "O'Reilly; $(false)"]) {
+    assert.deepEqual(Model.capturedCommandPayload(Model.searchCommand(query, "42")),
+      ["hey", "search", "--account", "42", "--json", "--", query])
+  }
+  const command = Model.searchCommand("  invoice  ", "42")
+  assert.deepEqual(Model.capturedCommandPayload(command),
+    ["hey", "search", "--account", "42", "--json", "--", "invoice"])
+  assert.equal(command[11], String(Model.finiteCommandTimeoutSec))
+})
+
+test("search results preserve HEY order, matching previews, and topic identity", () => {
+  const parsed = Model.parseSearchResults(JSON.stringify({ ok: true, data: [
+    {
+      id: 4471829, topic_id: 331, subject: "Kitchen &amp; remodel",
+      updated_at: "2026-08-18T12:00:00Z",
+      messages: [{ summary: "The <b>cabinets</b> arrive on Tuesday", creator: { name: "Jane Doe" } }]
+    },
+    {
+      topic_id: 332, subject: "Archived plans", updated_at: "2026-08-19T12:00:00Z",
+      messages: [{ summary: "A matching message", alternative_sender_name: "Jane at Work", creator: { name: "Jane Doe" } }]
+    }
+  ] }), "42", [{ id: 42, name: "Work" }])
+
+  assert.equal(parsed.ok, true)
+  assert.deepEqual(parsed.items.map(item => item.url),
+    ["https://app.hey.com/topics/331", "https://app.hey.com/topics/332"])
+  assert.equal(parsed.items[0].id, "4471829")
+  assert.equal(parsed.items[0].title, "Kitchen & remodel")
+  assert.equal(parsed.items[0].excerpt, "The cabinets arrive on Tuesday")
+  assert.equal(parsed.items[0].creator, "Jane Doe")
+  assert.equal(parsed.items[0].initials, "JD")
+  assert.equal(parsed.items[0].accountId, "42")
+  assert.equal(parsed.items[0].accountName, "Work")
+  assert.equal(parsed.items[0].timestampMs, Date.parse("2026-08-18T12:00:00Z"))
+  assert.equal(parsed.items[0].unread, null, "search does not report seen state")
+  assert.equal(parsed.items[1].id, "", "a topic without a posting must still open")
+  assert.equal(parsed.items[1].creator, "Jane at Work")
+})
+
+test("search handles empty, malformed, oversized, and sparse responses", () => {
+  assert.deepEqual(Model.parseSearchResults('{"ok":true,"data":[]}', "42").items, [])
+  for (const raw of ["not json", '{"ok":true,"data":{}}', "x".repeat(Model.cliResponseByteLimit + 1)]) {
+    assert.equal(Model.parseSearchResults(raw).ok, false)
+  }
+  assert.equal(Model.parseSearchResults('{"ok":false,"code":"auth","error":"Sign in"}').code, "auth")
+
+  const parsed = Model.parseSearchResults(JSON.stringify({ ok: true, data: [
+    null, { id: 7 }, { topic_id: 0 },
+    { topic_id: 332 },
+    { topic_id: 333, messages: [{ created_at: "2026-08-18T12:00:00Z", creator: { email_address: "jane@example.com" } }] }
+  ] }), "42")
+  assert.equal(parsed.items.length, 2)
+  assert.equal(parsed.items[0].title, "HEY email")
+  assert.equal(parsed.items[0].timestampMs, 0)
+  assert.equal(parsed.items[0].initials, "?")
+  assert.equal(parsed.items[0].accountId, "42")
+  assert.equal(parsed.items[1].timestampMs, Date.parse("2026-08-18T12:00:00Z"))
+  assert.equal(parsed.items[1].creator, "jane@example.com")
+
+  const bounded = Model.parseSearchResults(JSON.stringify({ ok: true, data:
+    Array.from({ length: 60 }, (_, i) => ({
+      topic_id: i + 1, id: "i".repeat(100), subject: "s".repeat(500),
+      messages: [{ summary: "p".repeat(1000), creator: { name: "n".repeat(500) } }]
+    }))
+  }), "42")
+  assert.equal(bounded.items.length, Model.maximumPostingCount)
+  assert.equal(bounded.items[0].id.length, Model.remoteIdCharacterLimit)
+  assert.equal(bounded.items[0].title.length, Model.remoteTitleCharacterLimit)
+  assert.equal(bounded.items[0].excerpt.length, Model.remoteExcerptCharacterLimit)
+  assert.equal(bounded.items[0].creator.length, Model.remoteNameCharacterLimit)
+})
+
+test("search topics retain a numeric account for remote TUI switching", () => {
+  const response = JSON.stringify({ ok: true, data: [{ topic_id: 331, subject: "Kitchen remodel" }] })
+  for (const account of ["", "all", "invalid", "42suffix", "0"]) {
+    assert.equal(Model.parseSearchResults(response, account).ok, false)
+  }
+  const item = Model.parseSearchResults(response, "42").items[0]
+  assert.deepEqual(Model.tuiRemoteCommand(Model.topicIdFromUrl(item.url), item.accountId, item.title),
+    ["hey", "--account", "42", "tui", "--instance", "omarchy", "--topic", "331", "--topic-title", "Kitchen remodel", "--remote"])
+  assert.deepEqual(Model.tuiFocusCommand(Model.topicIdFromUrl(item.url), item.accountId),
+    ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.hey", "hey", "--account", "42", "tui", "--instance", "omarchy", "--topic", "331"])
+})
+
 test("watchCommand follows every box without a finite-command deadline", () => {
   const command = Model.watchCommand()
   assert.deepEqual(Model.capturedCommandPayload(command),

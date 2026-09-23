@@ -265,6 +265,13 @@ function boxCommand(limit, withAccountFilter) {
   return boundedCaptureCommand(command, cliResponseByteLimit, cliErrorByteLimit)
 }
 
+function searchCommand(query, accountId) {
+  // ponytail: live search reads one page; add pagination when browsing more is needed.
+  return boundedCaptureCommand(
+    ["hey", "search", "--account", String(accountId), "--json", "--", String(query || "").trim()],
+    cliResponseByteLimit, cliErrorByteLimit)
+}
+
 // hey watch is the wake-up: it follows every box over HEY's cable and prints
 // a line per change, plus "ready", "disconnected" and "resync" about itself.
 // setpriv --pdeathsig ties it to the shell, so a shell that dies takes its
@@ -594,6 +601,46 @@ function parseNotifications(raw, limit, accounts) {
   return { ok: true, error: "", items: items }
 }
 
+function parseSearchResults(raw, accountId, accounts) {
+  var result = parseJson(raw)
+  if (!result.ok) return result
+  if (!Array.isArray(result.value.data)) return { ok: false, error: "The HEY CLI returned invalid search results" }
+
+  // Search omits account and seen state. Every page must come from a known
+  // account so the TUI can switch to it; unknown read state stays unmarked.
+  var selectedAccount = boundedString(accountId, remoteIdCharacterLimit).trim()
+  if (!/^[1-9]\d*$/.test(selectedAccount)) return { ok: false, error: "The HEY search account is missing or invalid" }
+  var accountName = ""
+  var source = Array.isArray(accounts) ? accounts.slice(0, maximumAccountCount) : []
+  for (var a = 0; a < source.length; a++) {
+    if (String(source[a].id) === selectedAccount) accountName = cleanText(source[a].name, remoteNameCharacterLimit)
+  }
+
+  var items = []
+  var matches = result.value.data.slice(0, maximumPostingCount)
+  for (var i = 0; i < matches.length; i++) {
+    var match = matches[i] || {}
+    var topicId = positiveId(match.topic_id)
+    if (topicId === 0) continue
+    var message = Array.isArray(match.messages) && match.messages[0] ? match.messages[0] : {}
+    var sender = postingSender(message)
+    var timestamp = Date.parse(boundedString(match.updated_at || message.created_at, remoteTimestampCharacterLimit))
+    items.push({
+      id: boundedString(match.id, remoteIdCharacterLimit),
+      accountId: selectedAccount,
+      accountName: accountName,
+      title: cleanText(match.subject || "HEY email", remoteTitleCharacterLimit),
+      excerpt: cleanText(message.summary, remoteExcerptCharacterLimit),
+      creator: sender,
+      initials: computeInitials(sender),
+      timestampMs: isFinite(timestamp) ? timestamp : 0,
+      url: heyWebUrl + "/topics/" + topicId,
+      unread: null
+    })
+  }
+  return { ok: true, error: "", items: items }
+}
+
 function normalizeNotification(value, accountsById) {
   var posting = value && typeof value === "object" ? value : {}
   var id = boundedString(posting.id || "", remoteIdCharacterLimit).trim()
@@ -851,6 +898,7 @@ if (typeof module !== "undefined") {
     parseProbe: parseProbe,
     cliVersionTooOld: cliVersionTooOld,
     boxCommand: boxCommand,
+    searchCommand: searchCommand,
     watchCommand: watchCommand,
     watchLine: watchLine,
     newImboxMail: newImboxMail,
@@ -877,6 +925,7 @@ if (typeof module !== "undefined") {
     parseScreenerCount: parseScreenerCount,
     parseAccounts: parseAccounts,
     parseNotifications: parseNotifications,
+    parseSearchResults: parseSearchResults,
     sortNotifications: sortNotifications,
     filterNotifications: filterNotifications,
     unreadCount: unreadCount,
